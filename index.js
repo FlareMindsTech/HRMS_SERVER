@@ -3,8 +3,9 @@ import bodyParser from 'body-parser';
 import mongoose from 'mongoose'
 import dotenv from "dotenv"
 import cors from "cors"
+import user from './Routes/UserRouter.js';
     
-dotenv.config()
+dotenv.config() 
 
 const app= express();
 app.use(cors())
@@ -15,11 +16,11 @@ mongoose.connect('mongodb://127.0.0.1:27017/HRMSDB')
 .then(() => console.log('Connected to MongoDB...'))
 .catch(err => console.error('Could not connect to MongoDB... '+err.message));
   
-
-
 app.get("/",(req,res)=>{
     res.send("Hello world")
 })
+
+app.use("/api/user",user)
 
 const PORT = process.env.PORT || 7800;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
