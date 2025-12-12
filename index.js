@@ -4,6 +4,7 @@ import mongoose from 'mongoose'
 import dotenv from "dotenv"
 import cors from "cors"
 import user from './Routes/UserRouter.js';
+import menu from './Routes/MenuRouter.js';
     
 dotenv.config() 
 
@@ -21,6 +22,7 @@ app.get("/",(req,res)=>{
 })
 
 app.use("/api/user",user)
+app.use("/api/menu", menu)
 
 const PORT = process.env.PORT || 7800;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
