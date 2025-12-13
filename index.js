@@ -22,6 +22,7 @@ app.get("/",(req,res)=>{
 })
 
 app.use("/api/user",user)
+
 app.use("/api/role",role)
 
 const PORT = process.env.PORT || 7800;
