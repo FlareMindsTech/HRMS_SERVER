@@ -1,9 +1,15 @@
 import mongoose from 'mongoose';
 
+const toTitleCase = (str) => {
+    if (!str) return str;
+    return str.toLowerCase().split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+};
+
 const menuSchema = new mongoose.Schema({
     menuName:{
         type:String,
-        required:true
+        required:true,
+        set: toTitleCase
     },
     menuCode:{
         type:String,
