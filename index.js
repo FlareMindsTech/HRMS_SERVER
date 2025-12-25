@@ -1,30 +1,38 @@
-import express from 'express'
+import express from 'express';
 import bodyParser from 'body-parser';
 import mongoose from 'mongoose'
 import dotenv from "dotenv"
 import cors from "cors"
 import user from './Routes/UserRouter.js';
+import role from './Routes/RoleRouter.js';    
+import menu from './Routes/MenuRouter.js';
+import experience from './Routes/ExperienceRouter.js';
+import address from "./Routes/addressRouter.js";
 import family from './Routes/FamilyRouter.js';
 
-dotenv.config()
+dotenv.config() 
+
+ 
+
+dotenv.config();
 
 const app = express();
-app.use(cors())
+
+app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
 mongoose.set('strictQuery', false);
 mongoose.connect('mongodb://127.0.0.1:27017/HRMSDB')
-    .then(() => console.log('Connected to MongoDB...'))
-    .catch(err => console.error('Could not connect to MongoDB... ' + err.message));
+  .then(() => console.log('Connected to MongoDB...'))
+  .catch(err => console.error('Could not connect to MongoDB... ' + err.message));
 
-app.get("/", (req, res) => {
-    res.send("Hello world")
-})
-
-app.use("/api/user", user)
+app.use("/api/user",user)
+app.use("/api/menu", menu)
+app.use("/api/experience", experience);
+app.use("/api/address", address);
+app.use("/api/role",role)
 app.use("/api/family", family)
 
 const PORT = process.env.PORT || 7800;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-
