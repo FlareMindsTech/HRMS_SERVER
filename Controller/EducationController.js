@@ -1,5 +1,18 @@
 import Education from "../Modules/EducationModule.js";
 
+// ===== HELPER TO DETERMINE HIGHEST QUALIFICATION =====
+const calculateHighestQualification = (data, existing = {}) => {
+  const get = (key) => (data[key] !== undefined ? data[key] : existing[key]);
+
+  if (get("phdInstituteName") || get("phdUniversityName") || get("phdYearOfPassing")) return "PhD";
+  if (get("pgInstituteName") || get("pgUniversityName") || get("pgDegree") || get("pgYearOfPassing")) return "PG";
+  if (get("ugInstituteName") || get("ugUniversityName") || get("ugDegree") || get("ugYearOfPassing")) return "UG";
+  if (get("diplomainstitution") || get("diplomacourse") || get("diplomayearOfPassing")) return "DIPLOMA";
+  if (get("itiinstituteName") || get("iticourse") || get("itiyearOfPassing")) return "ITI";
+  if (get("hscSchoolName")) return "HSC";
+  return "SSLC";
+};
+
 // ===== CREATE EDUCATION =====
 export const createEducation = async (req, res) => {
   try {
@@ -61,19 +74,17 @@ export const createEducation = async (req, res) => {
     if (checkPercentage(sslcPercentage)) return res.status(400).json({ message: "SSLC percentage must be 0-100" });
     if (checkPercentage(hscPercentage)) return res.status(400).json({ message: "HSC percentage must be 0-100" });
     if (checkPercentage(itipercentage)) return res.status(400).json({ message: "ITI percentage must be 0-100" });
-    if (checkPercentage(diplapercentage)) return res.status(400).json({ message: "Diploma percentage must be 0-100" });
+    if (checkPercentage(diplomapercentage)) return res.status(400).json({ message: "Diploma percentage must be 0-100" });
     if (checkCgpa(ugCgpa)) return res.status(400).json({ message: "UG CGPA must be 0-10" });
     if (checkCgpa(pgCgpa)) return res.status(400).json({ message: "PG CGPA must be 0-10" });
 
-    // ===== AUTO DETERMINE HIGHEST QUALIFICATION =====
-    let highestQualification = "UG"; // default
-    if (phdInstituteName || phdUniversityName || phdResearchArea || phdYearOfPassing) highestQualification = "PhD";
-    else if (pgInstituteName || pgUniversityName || pgDegree || pgDepartmentCourse || pgYearOfPassing) highestQualification = "PG";
-    else if (ugInstituteName) highestQualification = "UG";
-    else if (diplomainstitution) highestQualification = "DIPLOMA";
-    else if (itiinstituteName) highestQualification = "ITI"; // ITI considered as DIPLOMA
-    else if (hscSchoolName) highestQualification = "HSC";
-    else highestQualification = "SSLC";
+    // ===== CHECK IF ALREADY EXISTS =====
+    const existingEducation = await Education.findOne({ userId });
+    if (existingEducation) {
+      return res.status(400).json({ message: "Education record already exists for this user. Use PUT to update." });
+    }
+
+    const highestQualification = calculateHighestQualification(req.body);
 
     // ===== CREATE EDUCATION DOCUMENT =====
     const education = new Education({
@@ -150,24 +161,16 @@ export const updateEducation = async (req, res) => {
     if (checkPercentage(updateData.sslcPercentage)) return res.status(400).json({ message: "SSLC percentage must be 0-100" });
     if (checkPercentage(updateData.hscPercentage)) return res.status(400).json({ message: "HSC percentage must be 0-100" });
     if (checkPercentage(updateData.itipercentage)) return res.status(400).json({ message: "ITI percentage must be 0-100" });
-    if (checkPercentage(updateData.diplapercentage)) return res.status(400).json({ message: "Diploma percentage must be 0-100" });
+    if (checkPercentage(updateData.diplomapercentage)) return res.status(400).json({ message: "Diploma percentage must be 0-100" });
     if (checkCgpa(updateData.ugCgpa)) return res.status(400).json({ message: "UG CGPA must be 0-10" });
     if (checkCgpa(updateData.pgCgpa)) return res.status(400).json({ message: "PG CGPA must be 0-10" });
 
-    // Auto-update highestQualification
-    if (updateData.phdInstituteName || updateData.phdUniversityName || updateData.phdResearchArea || updateData.phdYearOfPassing)
-      updateData.highestQualification = "PhD";
-    else if (updateData.pgInstituteName || updateData.pgUniversityName || updateData.pgDegree || updateData.pgDepartmentCourse || updateData.pgYearOfPassing)
-      updateData.highestQualification = "PG";
-    else if (updateData.ugInstituteName) updateData.highestQualification = "UG";
-    else if (updateData.diplomainstitution) updateData.highestQualification = "DIPLOMA";
-    else if (updateData.itiinstituteName) updateData.highestQualification = "DIPLOMA";
-    else if (updateData.hscSchoolName) updateData.highestQualification = "HSC";
-    else if (updateData.sslcSchoolName) updateData.highestQualification = "SSLC";
+    const existing = await Education.findOne({ userId });
+    if (!existing) return res.status(404).json({ message: "Education record not found" });
+
+    updateData.highestQualification = calculateHighestQualification(updateData, existing);
 
     const education = await Education.findOneAndUpdate({ userId }, updateData, { new: true });
-    if (!education) return res.status(404).json({ message: "Education not found" });
-
     res.status(200).json({ message: "Education updated successfully", education });
   } catch (error) {
     console.error(error);

@@ -10,6 +10,8 @@ import experience from './Routes/ExperienceRouter.js';
 import address from "./Routes/addressRouter.js";
 import roleMenu from './Routes/RoleMenuRouter.js';
 import education from './Routes/EducationRoutes.js';
+import document from './Routes/DocumentRouter.js';
+import currentCompany from './Routes/CurrentCompanyRouter.js';
 dotenv.config() 
 
  
@@ -34,5 +36,7 @@ app.use("/api/address", address);
 app.use("/api/role",role)
 app.use("/api/rolemenu", roleMenu);
 app.use("/api/education", education);
+app.use("/api/document", document);
+app.use("/api/currentcompany", currentCompany);
 const PORT = process.env.PORT || 7800;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
