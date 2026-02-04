@@ -9,8 +9,11 @@ import menu from './Routes/MenuRouter.js';
 import experience from './Routes/ExperienceRouter.js';
 import address from "./Routes/addressRouter.js";
 import family from './Routes/FamilyRouter.js';
-
-dotenv.config() 
+import roleMenu from './Routes/RoleMenuRouter.js';
+import education from './Routes/EducationRoutes.js';
+import document from './Routes/DocumentRouter.js';
+import currentCompany from './Routes/CurrentCompanyRouter.js';
+ 
 
  
 
@@ -23,7 +26,7 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 mongoose.set('strictQuery', false);
-mongoose.connect('mongodb://127.0.0.1:27017/HRMSDB')
+mongoose.connect('mongodb+srv://kartheeshwarang_db_user:hrms@cluster0.msvlbme.mongodb.net/HRMS')
   .then(() => console.log('Connected to MongoDB...'))
   .catch(err => console.error('Could not connect to MongoDB... ' + err.message));
 
@@ -33,6 +36,16 @@ app.use("/api/experience", experience);
 app.use("/api/address", address);
 app.use("/api/role",role)
 app.use("/api/family", family)
+app.use("/api/rolemenu", roleMenu);
+app.use("/api/education", education);
+app.use("/api/document", document);
+app.use("/api/currentcompany", currentCompany);
+
+
+
+
+
+
 
 const PORT = process.env.PORT || 7800;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
