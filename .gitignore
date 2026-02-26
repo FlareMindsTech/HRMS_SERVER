@@ -47,3 +47,6 @@ Thumbs.db
 
 # Ignore package-lock.json
 package-lock.json
+
+
+index.html
