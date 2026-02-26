@@ -1,14 +1,16 @@
 import express from "express";
-import { deleteUser, getAllUser, getNoOwner, getUserById, login, ownerReg, profile, Register, updateUser } from "../Controller/UserController.js";
+import { deleteUser, getAllUser, getNoOwner, getUserById, login, employeeInternReg, managementReg, profile, Register, updateUser } from "../Controller/UserController.js";
 import { Authendication } from "../Middleware/Auth.js";
 const router = express.Router();
 
 router.post("/login",login)
 router.get("/profile",Authendication,profile)
-router.post("/v1/ownerReg",ownerReg)
+// router.post("/v1/ownerReg",ownerReg)
 // router.delete("/v2/currentCompany",currentCompany)
 
 router.post("/v2/reg",  Register)
+router.post("/v2/employeeInternReg",  employeeInternReg)
+router.post("/v2/managementReg",  managementReg)
 router.put("/v2/update",  updateUser)
 router.delete("/v2/deleteUser",  deleteUser)
 router.get("/get",  getAllUser)

@@ -54,6 +54,25 @@ const user =  new mongoose.Schema({
         type:mongoose.Schema.Types.ObjectId,
         ref:'Role',
     },
+      tlId:{
+        type:mongoose.Schema.Types.ObjectId,
+        ref:'User',
+    },
+      employeeId:{
+        type:mongoose.Schema.Types.ObjectId,
+        ref:'User',
+    },
+    isWfhApproved: {
+        type: Boolean,
+        default: false
+    },
+    lastLoginLocation: {
+        latitude: { type: String },
+        longitude: { type: String },
+        address: { type: String },
+        timestamp: { type: Date }
+    },
+
   
     
 },  {
