@@ -1,11 +1,11 @@
 import User from "../Modules/UserModule.js";
 import jwt from 'jsonwebtoken';
 export const Authendication = async (req, res, next) => {
-    let token = req.header('hrms-auth-token');
+    let token;
     
-    // Also check standard Authorization Bearer token header
+    // Only check standard Authorization Bearer token header
     const authHeader = req.header('Authorization');
-    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+    if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
     }
 
