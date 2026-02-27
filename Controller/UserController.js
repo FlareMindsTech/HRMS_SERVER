@@ -193,7 +193,14 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
 async function getAddressFromCoordinates(lat, lon) {
     if (!lat || !lon) return "";
     try {
-        const response = await axios.get(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+        const response = await axios.get(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+            {
+                headers: {
+                    'User-Agent': 'HRMS_SERVER_App/1.0 (contact@flareminds.com)'
+                }
+            }
+        );
         return response.data.display_name || "";
     } catch (error) {
         console.error("Geocoding error:", error);
