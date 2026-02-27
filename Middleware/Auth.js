@@ -1,5 +1,5 @@
 import User from "../Modules/UserModule.js";
-
+import jwt from 'jsonwebtoken';
 export const Authendication = async (req, res, next) => {
     let token = req.header('hrms-auth-token');
     
@@ -31,7 +31,7 @@ export const Authendication = async (req, res, next) => {
         req.user = {
             ...req.user,
             roleId: user.role._id,
-            roleName: user.role.roleName,
+            roleName: user.role.roleType,
             isOwner: false
         };
 
@@ -46,14 +46,10 @@ export const Authendication = async (req, res, next) => {
 export const Autherization = async (req, res, next) => {
     if (req.user.isOwner) return next();
 
-    try {
-        const access = await RoleMenu.find({ roleId: req.user.roleId })
-            .populate("roleId")
-            .populate("menuId");
+    const access = await RolemenuAccess.find({ role: req.user.roleId })
+        .populate("role")
+        .populate("menu");
 
-        req.user = { ...req.user, access };
-        next();
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+    req.user = { ...req.user, access };
+    next();
 };
