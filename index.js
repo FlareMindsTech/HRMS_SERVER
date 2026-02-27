@@ -15,6 +15,7 @@ import document from './Routes/DocumentRouter.js';
 import currentCompany from './Routes/CurrentCompanyRouter.js';
 import leave from './Routes/LeaveRouter.js';
 import dailyReport from './Routes/DailyReportRouter.js';
+import attendance from './Routes/AttendanceRouter.js';
 
 
 
@@ -46,6 +47,7 @@ app.use("/api/document", document);
 app.use("/api/currentcompany", currentCompany);
 app.use("/api/leave", leave);
 app.use("/api/daily-report", dailyReport);
+app.use("/api/attendance", attendance);
 
 
 
