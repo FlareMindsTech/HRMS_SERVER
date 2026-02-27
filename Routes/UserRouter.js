@@ -1,9 +1,10 @@
 import express from "express";
-import { deleteUser, getAllUser, getNoOwner, getUserById, login, employeeInternReg, managementReg, profile, Register, updateUser } from "../Controller/UserController.js";
+import { deleteUser, getAllUser, getNoOwner, getUserById, login, logout, employeeInternReg, managementReg, profile, Register, updateUser } from "../Controller/UserController.js";
 import { Authendication } from "../Middleware/Auth.js";
 const router = express.Router();
 
 router.post("/login",login)
+router.post("/logout",Authendication,logout)
 router.get("/profile",Authendication,profile)
 // router.post("/v1/ownerReg",ownerReg)
 // router.delete("/v2/currentCompany",currentCompany)

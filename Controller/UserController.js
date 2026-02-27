@@ -2,6 +2,7 @@
 import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
 import User from '../Modules/UserModule.js';
+import axios from 'axios';
 // import { checkAccessCreate, checkAccessDelete, checkAccessGet, checkAccessUpdate } from "../config/checkAccess.js";
 
 
@@ -188,6 +189,18 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
+// Function to reverse geocode lat/lng to an address
+async function getAddressFromCoordinates(lat, lon) {
+    if (!lat || !lon) return "";
+    try {
+        const response = await axios.get(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+        return response.data.display_name || "";
+    } catch (error) {
+        console.error("Geocoding error:", error);
+        return "";
+    }
+}
+
 export const login = async (req, res) => {
     let email = req.body.email
     let foundUser = await User.findOne({ email: email })
@@ -217,11 +230,17 @@ export const login = async (req, res) => {
                 }
 
                 // Update live location
+                let finalAddress = req.body.address || "";
+                
+                if (req.body.latitude && req.body.longitude && !finalAddress) {
+                    finalAddress = await getAddressFromCoordinates(req.body.latitude, req.body.longitude);
+                }
+
                 if (req.body.latitude && req.body.longitude) {
                     foundUser.lastLoginLocation = {
                         latitude: req.body.latitude,
                         longitude: req.body.longitude,
-                        address: req.body.address || "",
+                        address: finalAddress,
                         timestamp: now
                     };
                     await foundUser.save();
@@ -283,6 +302,36 @@ export const login = async (req, res) => {
         })
     }else{
         res.status(404).json({ message: "user not found" })
+    }
+}
+
+export const logout = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const now = new Date();
+        const dateString = now.toISOString().split('T')[0];
+
+        let todayAttendance = await Attendance.findOne({ userId: userId, date: dateString });
+        
+        if (todayAttendance && !todayAttendance.logoutTime) {
+            todayAttendance.logoutTime = now;
+            
+            // Calculate total hours
+            const diffMs = now - new Date(todayAttendance.loginTime);
+            const diffHrs = diffMs / (1000 * 60 * 60);
+            todayAttendance.totalHours = parseFloat(diffHrs.toFixed(2));
+            
+            // update status to Full Day if 8+ hours
+            if (todayAttendance.status === 'Pending Full Day' && diffHrs >= 8) {
+                todayAttendance.status = 'Full Day';
+            }
+            
+            await todayAttendance.save();
+        }
+
+        res.status(200).json({ message: "Logout successful" });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
     }
 }
 

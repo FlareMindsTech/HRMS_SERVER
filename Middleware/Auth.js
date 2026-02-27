@@ -1,14 +1,18 @@
 import User from "../Modules/UserModule.js";
-import jwt from "jsonwebtoken";
-import RoleMenu from "../Modules/RoleMenuModule.js";
-
 
 export const Authendication = async (req, res, next) => {
-    const token = req.header('hrms-auth-token');
+    let token = req.header('hrms-auth-token');
+    
+    // Also check standard Authorization Bearer token header
+    const authHeader = req.header('Authorization');
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+    }
+
     if (!token) return res.status(403).json({ message: 'forbidden - token is unavailable' });
 
     try {
-        const decoded = jwt.verify(token, process.env.JWT);
+        const decoded = jwt.verify(token, process.env.JWT || "fallback_hrms_secret_key");
         req.user = decoded;
 
         const getOwner = await User.findById(req.user.id).select("isOwner");
