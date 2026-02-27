@@ -18,12 +18,12 @@ export const Register = async (req, res) => {
     // let menu = req.body.menuId
     // let obj =await checkAccessCreate(req.user, menu)
     // if (obj.access == false && obj.message !== null) return res.status(obj.status).json({ message: obj.message});
-    
+
     let exUser = await User.findOne({ email: email })
     if (exUser) {
         return res.status(400).json({ message: "email already register" })
     }
-    
+
     let roleDoc = await Role.findOne({ roleName: roleName });
     if (!roleDoc) {
         return res.status(400).json({ message: "Invalid role specified" });
@@ -43,8 +43,8 @@ export const Register = async (req, res) => {
             role: roleDoc._id,
         })
         try {
-            let user=await register.save()
-            res.status(201).json({ message: "Register success" ,id:user._id})
+            let user = await register.save()
+            res.status(201).json({ message: "Register success", id: user._id })
         } catch (error) {
             res.status(400).json({ message: error.message });
         }
@@ -106,7 +106,7 @@ export const employeeInternReg = async (req, res) => {
     if (exUser) {
         return res.status(400).json({ message: "email already register" })
     }
-    
+
     bcrypt.hash(req.body.password, saltRounds, async (err, hash) => {
         let register = new User({
             email: req.body.email,
@@ -123,9 +123,9 @@ export const employeeInternReg = async (req, res) => {
             employeeId: employeeId || undefined
         })
         try {
-            let user=await register.save()
+            let user = await register.save()
             // Dynamic Success Message
-            res.status(201).json({ message: `${roleDoc.roleName} Register success` ,id:user._id})
+            res.status(201).json({ message: `${roleDoc.roleName} Register success`, id: user._id })
         } catch (error) {
             res.status(400).json({ message: error.message });
         }
@@ -141,7 +141,7 @@ export const managementReg = async (req, res) => {
     if (exUser) {
         return res.status(400).json({ message: "email already register" })
     }
-    
+
     let roleDoc = await Role.findOne({ roleName: roleName });
     if (!roleDoc) {
         return res.status(400).json({ message: "Invalid role specified" });
@@ -158,13 +158,13 @@ export const managementReg = async (req, res) => {
             bloodGroup: req.body.bloodGroup,
             marriageStatus: req.body.marriageStatus,
             mobileNo: req.body.mobileNo,
-            role: roleDoc._id, 
-            isOwner: isOwner 
+            role: roleDoc._id,
+            isOwner: isOwner
         })
         try {
-            let user=await register.save()
+            let user = await register.save()
             // Dynamic Success Message
-            res.status(201).json({ message: `${roleDoc.roleName} Registration success` ,id:user._id})
+            res.status(201).json({ message: `${roleDoc.roleName} Registration success`, id: user._id })
         } catch (error) {
             res.status(400).json({ message: error.message });
         }
@@ -177,15 +177,15 @@ import Attendance from '../Modules/AttendanceModule.js';
 
 // haversine formula to calculate distance in meters
 function getDistanceInMeters(lat1, lon1, lat2, lon2) {
-    if(!lat1 || !lon1 || !lat2 || !lon2) return null;
+    if (!lat1 || !lon1 || !lat2 || !lon2) return null;
     const R = 6371e3; // Earth radius in meters
     const rad = Math.PI / 180;
     const dLat = (lat2 - lat1) * rad;
     const dLon = (lon2 - lon1) * rad;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 }
 
@@ -211,26 +211,26 @@ async function getAddressFromCoordinates(lat, lon) {
 export const login = async (req, res) => {
     let email = req.body.email
     let foundUser = await User.findOne({ email: email })
-    
+
     if (foundUser) {
         bcrypt.compare(req.body.password, foundUser.password, async (err, result) => {
             if (result) {
                 const now = new Date();
                 let locationType = "WFH"; // Default
-                
+
                 // Attendance geo-fencing check
                 if (req.body.latitude && req.body.longitude) {
                     const officeLat = process.env.OFFICE_LATITUDE || 11.023986; // Fallback for testing
                     const officeLon = process.env.OFFICE_LONGITUDE || 77.122534;
                     const officeRadius = process.env.OFFICE_RADIUS_METERS || 200;
-                    
+
                     const distance = getDistanceInMeters(req.body.latitude, req.body.longitude, officeLat, officeLon);
-                    
+
                     if (distance !== null && distance <= officeRadius) {
                         locationType = "Office";
                     }
                 }
-                
+
                 // Block if trying to WFH without approval
                 if (locationType === "WFH" && foundUser.isWfhApproved !== true) {
                     return res.status(403).json({ message: "Login restricted: You must be at the office or have WFH management approval." });
@@ -238,7 +238,7 @@ export const login = async (req, res) => {
 
                 // Update live location
                 let finalAddress = req.body.address || "";
-                
+
                 if (req.body.latitude && req.body.longitude && !finalAddress) {
                     finalAddress = await getAddressFromCoordinates(req.body.latitude, req.body.longitude);
                 }
@@ -254,37 +254,35 @@ export const login = async (req, res) => {
                 }
 
                 // time check for late (Shift: 9:00 AM to 6:00 PM)
-                // assuming timezone matches server
                 const hours = now.getHours();
                 const minutes = now.getMinutes();
-                
-                // if they log in at 9:01 AM or later, it is considered Late (Half Day)
+
+                // if they log in at 9:01 AM or later, it is considered Late
                 const isLate = (hours > 9) || (hours === 9 && minutes > 0);
-                
-                const attendanceStatus = isLate ? "Half Day" : "Pending Full Day";
 
                 // Create Attendance Record
                 const dateString = now.toISOString().split('T')[0];
                 let todayAttendance = await Attendance.findOne({ userId: foundUser._id, date: dateString });
-                
+
                 if (!todayAttendance) {
                     todayAttendance = new Attendance({
                         userId: foundUser._id,
                         date: dateString,
                         loginTime: now,
                         locationType: locationType,
-                        status: attendanceStatus
+                        status: 'Present',
+                        isLate: isLate
                     });
                     await todayAttendance.save();
                 }
 
                 // 9 Hour token expiry (9 AM to 6 PM) with a fallback secret if .env is missing
                 const token = jwt.sign(
-                    { id: foundUser?._id, attendanceId: todayAttendance._id }, 
-                    process.env.JWT || "fallback_hrms_secret_key", 
+                    { id: foundUser?._id, attendanceId: todayAttendance._id },
+                    process.env.JWT || "fallback_hrms_secret_key",
                     { expiresIn: '9h' }
                 )
-                
+
                 // construct the response
                 let responsePayload = {
                     message: "login successfully",
@@ -307,7 +305,7 @@ export const login = async (req, res) => {
                 res.status(400).json({ message: "please enter correct password" })
             }
         })
-    }else{
+    } else {
         res.status(404).json({ message: "user not found" })
     }
 }
@@ -319,20 +317,24 @@ export const logout = async (req, res) => {
         const dateString = now.toISOString().split('T')[0];
 
         let todayAttendance = await Attendance.findOne({ userId: userId, date: dateString });
-        
+
         if (todayAttendance && !todayAttendance.logoutTime) {
             todayAttendance.logoutTime = now;
-            
-            // Calculate total hours
+
+            // Calculate total working minutes
             const diffMs = now - new Date(todayAttendance.loginTime);
-            const diffHrs = diffMs / (1000 * 60 * 60);
-            todayAttendance.totalHours = parseFloat(diffHrs.toFixed(2));
-            
-            // update status to Full Day if 8+ hours
-            if (todayAttendance.status === 'Pending Full Day' && diffHrs >= 8) {
-                todayAttendance.status = 'Full Day';
+            const totalMinutes = Math.floor(diffMs / (1000 * 60));
+            todayAttendance.totalWorkingMinutes = totalMinutes;
+
+            // update status (Full Day: 8.5h = 510m, Half Day: 4h = 240m)
+            if (totalMinutes >= 510) {
+                todayAttendance.status = 'Present';
+            } else if (totalMinutes >= 240) {
+                todayAttendance.status = 'Half Day';
+            } else {
+                todayAttendance.status = 'Absent';
             }
-            
+
             await todayAttendance.save();
         }
 
@@ -359,7 +361,7 @@ export const upRoleUser = async (req, res) => {
         // let menu = req.body.menuId
         // let obj =await checkAccessUpdate(req.user, menu)
         // if (obj.access == false && obj.message !== null) return res.status(obj.status).json({ message: obj.message});
-        const user = await User.findByIdAndUpdate(req.params.id, { $set: {role:req.body.role}}, { new: true })
+        const user = await User.findByIdAndUpdate(req.params.id, { $set: { role: req.body.role } }, { new: true })
         res.status(200).json({ meesage: "Updated successfully" })
     } catch (error) {
         res.status(400).json({ message: error.message });
@@ -393,7 +395,7 @@ export const profile = async (req, res) => {
 export const getAllUser = async (req, res) => {
     try {
         const users = await User.find().populate("role").select("-password").lean();
-        
+
         const mappedUsers = [];
         const tlIndexMap = new Map();
         const employeeIndexMap = new Map();
@@ -401,9 +403,9 @@ export const getAllUser = async (req, res) => {
         // Pass 1: Add TLs and non-employees/non-interns to map
         // Also initialize `employees` and `interns` arrays
         users.forEach(user => {
-            user.employees = []; 
+            user.employees = [];
             user.interns = [];
-            
+
             if (!user.tlId && !user.employeeId) {
                 mappedUsers.push(user);
                 tlIndexMap.set(user._id.toString(), user);
@@ -422,7 +424,7 @@ export const getAllUser = async (req, res) => {
                     employee.interns.push(user);
                 } else {
                     // Fallback if Employee ID exists but Employee wasn't found
-                    mappedUsers.push(user); 
+                    mappedUsers.push(user);
                 }
             }
         });
@@ -435,7 +437,7 @@ export const getAllUser = async (req, res) => {
                     tl.employees.push(user);
                 } else {
                     // Fallback if TL ID exists but TL wasn't found
-                    mappedUsers.push(user); 
+                    mappedUsers.push(user);
                 }
             }
         });
@@ -466,11 +468,11 @@ export const getAllUser = async (req, res) => {
 
 export const getNoOwner = async (req, res) => {
     try {
-        let data=[]
+        let data = []
         const getUser = await User.find().populate("role").populate("tlId", "-password").select("-password")
-        getUser.map((item)=>{
-            if(item.isOwner == true){
-                getUser.splice(0,1)
+        getUser.map((item) => {
+            if (item.isOwner == true) {
+                getUser.splice(0, 1)
             }
         })
         data.push(getUser)
@@ -487,6 +489,5 @@ export const getUserById = async (req, res) => {
     } catch (error) {
         res.status(400).json({ message: error.message });
     }
-        
-    }
 
+}
