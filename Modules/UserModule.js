@@ -34,6 +34,10 @@ const user =  new mongoose.Schema({
         type:Number,
         required: true
     },
+    language:{
+        type:[String],
+        required: true
+    },
     password:{
         type:String,
         required: true
