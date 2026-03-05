@@ -9,7 +9,7 @@ const attendanceSchema = new mongoose.Schema(
     },
 
     date: {
-      type: String, 
+      type: String,
       required: true
     },
 
@@ -23,6 +23,11 @@ const attendanceSchema = new mongoose.Schema(
     },
 
     totalWorkingMinutes: {
+      type: Number,
+      default: 0
+    },
+
+    totalHours: {
       type: Number,
       default: 0
     },

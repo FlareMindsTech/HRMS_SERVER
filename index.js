@@ -16,6 +16,11 @@ import currentCompany from './Routes/CurrentCompanyRouter.js';
 import leave from './Routes/LeaveRouter.js';
 import dailyReport from './Routes/DailyReportRouter.js';
 import attendance from './Routes/AttendanceRouter.js';
+import project from './Routes/ProjectRouter.js';
+import task from './Routes/TaskRouter.js';
+import timeTracking from './Routes/TimeTrackingRouter.js';
+import sprint from './Routes/SprintRouter.js';
+import dashboard from './Routes/DashboardRouter.js';
 
 
 
@@ -48,6 +53,11 @@ app.use("/api/currentcompany", currentCompany);
 app.use("/api/leave", leave);
 app.use("/api/daily-report", dailyReport);
 app.use("/api/attendance", attendance);
+app.use("/api/project", project);
+app.use("/api/task", task);
+app.use("/api/time-tracking", timeTracking);
+app.use("/api/sprint", sprint);
+app.use("/api/dashboard", dashboard);
 
 
 

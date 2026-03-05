@@ -8,8 +8,8 @@ const roleSchema = new mongoose.Schema({
     },
     roleCode: {
         type: String,
-        unique: true 
-        
+        unique: true
+
     },
     isActive: {
         type: Boolean,
@@ -20,7 +20,10 @@ const roleSchema = new mongoose.Schema({
         type: Boolean,
         required: true,
         default: false
-    }
+    },
+    permissions: [{
+        type: String
+    }]
 }, { timestamps: true });
 
 
