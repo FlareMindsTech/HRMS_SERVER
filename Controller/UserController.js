@@ -42,6 +42,7 @@ export const Register = async (req, res) => {
             bloodGroup: req.body.bloodGroup,
             marriageStatus: req.body.marriageStatus,
             mobileNo: req.body.mobileNo,
+            language: req.body.language,
             role: roleDoc._id,
         })
         try {
@@ -120,6 +121,7 @@ export const employeeInternReg = async (req, res) => {
             bloodGroup: req.body.bloodGroup,
             marriageStatus: req.body.marriageStatus,
             mobileNo: req.body.mobileNo,
+            language: req.body.language,
             role: roleDoc._id,
             tlId: tlId || undefined,
             employeeId: employeeId || undefined
@@ -160,6 +162,7 @@ export const managementReg = async (req, res) => {
             bloodGroup: req.body.bloodGroup,
             marriageStatus: req.body.marriageStatus,
             mobileNo: req.body.mobileNo,
+            language: req.body.language,
             role: roleDoc._id,
             isOwner: isOwner
         })
@@ -194,11 +197,14 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
 async function getAddressFromCoordinates(lat, lon) {
     if (!lat || !lon) return "";
     try {
-        const response = await axios.get(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`, {
-             headers: {
+        const response = await axios.get(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+            {
+                headers: {
                     'User-Agent': 'HRMS_SERVER_App/1.0 (contact@flareminds.com)'
                 }
-        });
+            }
+        );
         return response.data.display_name || "";
     } catch (error) {
         console.error("Geocoding error:", error);
@@ -252,7 +258,6 @@ export const login = async (req, res) => {
                 }
 
                 // time check for late (Shift: 9:00 AM to 6:00 PM)
-                // assuming timezone matches server
                 const hours = now.getHours();
                 const minutes = now.getMinutes();
 
@@ -271,7 +276,7 @@ export const login = async (req, res) => {
                         date: dateString,
                         loginTime: now,
                         locationType: locationType,
-                        status: attendanceStatus,
+                        status: 'Present',
                         isLate: isLate
                     });
                     await todayAttendance.save();
@@ -325,13 +330,9 @@ export const logout = async (req, res) => {
             // Calculate total working minutes
             const diffMs = now - new Date(todayAttendance.loginTime);
             const totalMinutes = Math.floor(diffMs / (1000 * 60));
-            const diffHrs = parseFloat((totalMinutes / 60).toFixed(2));
-
             todayAttendance.totalWorkingMinutes = totalMinutes;
-            todayAttendance.totalHours = diffHrs;
 
-            // update status based on total minutes
-            // 8.5 hours = 510 minutes, 4 hours = 240 minutes
+            // update status (Full Day: 8.5h = 510m, Half Day: 4h = 240m)
             if (totalMinutes >= 510) {
                 todayAttendance.status = 'Present';
             } else if (totalMinutes >= 240) {
@@ -496,4 +497,3 @@ export const getUserById = async (req, res) => {
     }
 
 }
-

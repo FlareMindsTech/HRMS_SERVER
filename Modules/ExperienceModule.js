@@ -23,7 +23,7 @@ const experienceSchema = new mongoose.Schema({
     },
     description: {
         type: String,
-        default: ""
+        required: true
     },
     salary: {
         type: String,
