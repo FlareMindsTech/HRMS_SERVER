@@ -3,8 +3,6 @@ import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
 import User from '../Modules/UserModule.js';
 import axios from 'axios';
-import Attendance from '../Modules/AttendanceModule.js';
-
 // import { checkAccessCreate, checkAccessDelete, checkAccessGet, checkAccessUpdate } from "../config/checkAccess.js";
 
 
@@ -175,6 +173,7 @@ export const managementReg = async (req, res) => {
 
 
 
+import Attendance from '../Modules/AttendanceModule.js';
 
 // haversine formula to calculate distance in meters
 function getDistanceInMeters(lat1, lon1, lat2, lon2) {
@@ -194,11 +193,14 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
 async function getAddressFromCoordinates(lat, lon) {
     if (!lat || !lon) return "";
     try {
-        const response = await axios.get(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`, {
-             headers: {
+        const response = await axios.get(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+            {
+                headers: {
                     'User-Agent': 'HRMS_SERVER_App/1.0 (contact@flareminds.com)'
                 }
-        });
+            }
+        );
         return response.data.display_name || "";
     } catch (error) {
         console.error("Geocoding error:", error);
@@ -252,14 +254,11 @@ export const login = async (req, res) => {
                 }
 
                 // time check for late (Shift: 9:00 AM to 6:00 PM)
-                // assuming timezone matches server
                 const hours = now.getHours();
                 const minutes = now.getMinutes();
 
-                // if they log in at 9:01 AM or later, it is considered Late (Half Day)
+                // if they log in at 9:01 AM or later, it is considered Late
                 const isLate = (hours > 9) || (hours === 9 && minutes > 0);
-
-                const attendanceStatus = isLate ? "Half Day" : "Present";
 
                 // Create Attendance Record
                 const dateString = now.toISOString().split('T')[0];
@@ -271,7 +270,7 @@ export const login = async (req, res) => {
                         date: dateString,
                         loginTime: now,
                         locationType: locationType,
-                        status: attendanceStatus,
+                        status: 'Present',
                         isLate: isLate
                     });
                     await todayAttendance.save();
@@ -325,13 +324,9 @@ export const logout = async (req, res) => {
             // Calculate total working minutes
             const diffMs = now - new Date(todayAttendance.loginTime);
             const totalMinutes = Math.floor(diffMs / (1000 * 60));
-            const diffHrs = parseFloat((totalMinutes / 60).toFixed(2));
-
             todayAttendance.totalWorkingMinutes = totalMinutes;
-            todayAttendance.totalHours = diffHrs;
 
-            // update status based on total minutes
-            // 8.5 hours = 510 minutes, 4 hours = 240 minutes
+            // update status (Full Day: 8.5h = 510m, Half Day: 4h = 240m)
             if (totalMinutes >= 510) {
                 todayAttendance.status = 'Present';
             } else if (totalMinutes >= 240) {
@@ -496,4 +491,3 @@ export const getUserById = async (req, res) => {
     }
 
 }
-
