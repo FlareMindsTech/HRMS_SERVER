@@ -40,7 +40,6 @@ export const Register = async (req, res) => {
             bloodGroup: req.body.bloodGroup,
             marriageStatus: req.body.marriageStatus,
             mobileNo: req.body.mobileNo,
-            language: req.body.language,
             role: roleDoc._id,
         })
         try {
@@ -119,7 +118,6 @@ export const employeeInternReg = async (req, res) => {
             bloodGroup: req.body.bloodGroup,
             marriageStatus: req.body.marriageStatus,
             mobileNo: req.body.mobileNo,
-            language: req.body.language,
             role: roleDoc._id,
             tlId: tlId || undefined,
             employeeId: employeeId || undefined
@@ -160,7 +158,6 @@ export const managementReg = async (req, res) => {
             bloodGroup: req.body.bloodGroup,
             marriageStatus: req.body.marriageStatus,
             mobileNo: req.body.mobileNo,
-            language: req.body.language,
             role: roleDoc._id,
             isOwner: isOwner
         })
