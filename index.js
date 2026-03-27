@@ -23,10 +23,6 @@ import sprint from './Routes/SprintRouter.js';
 import dashboard from './Routes/DashboardRouter.js';
 
 
-
-
-
-
 dotenv.config();
 
 const app = express();
@@ -39,6 +35,10 @@ mongoose.set('strictQuery', false);
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('Connected to MongoDB...'))
   .catch(err => console.error('Could not connect to MongoDB... ' + err.message));
+
+  app.get("/", (req, res) => {
+  res.send("welcome");
+});
 
 app.use("/api/user", user)
 app.use("/api/menu", menu)
@@ -58,12 +58,6 @@ app.use("/api/task", task);
 app.use("/api/time-tracking", timeTracking);
 app.use("/api/sprint", sprint);
 app.use("/api/dashboard", dashboard);
-
-
-
-
-
-
 
 
 
