@@ -1,19 +1,24 @@
 import express from 'express';
 import {
-    getAllAttendance,
-    getAttendanceByUser,
-    getAttendanceByMonth,
-    updateAttendanceCorrection,
-    deleteAttendance
+  getAllAttendance,
+  getAttendanceByUser,
+  getAttendanceByMonth,
+  updateAttendanceCorrection,
+  deleteAttendance
 } from '../Controller/AttendanceController.js';
+import { Authentication, checkMenuAccess } from '../Middleware/Auth.js';
 
 const router = express.Router();
 
-// No manual creation - Attendance must come from Login/Logout
-router.get('/all', getAllAttendance);
+router.use(Authentication);
+
+// User attendance queries
 router.get('/user/:userId', getAttendanceByUser);
 router.get('/user/:userId/:month/:year', getAttendanceByMonth);
-router.put('/correction/:id', updateAttendanceCorrection);
-router.delete('/delete/:id', deleteAttendance);
+
+// Admin attendance management (Requires ATTENDANCE menu permission mapping)
+router.get('/all', checkMenuAccess("ATTENDANCE"), getAllAttendance);
+router.put('/correction/:id', checkMenuAccess("ATTENDANCE"), updateAttendanceCorrection);
+router.delete('/delete/:id', checkMenuAccess("ATTENDANCE"), deleteAttendance);
 
 export default router;

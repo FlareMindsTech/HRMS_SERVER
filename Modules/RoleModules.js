@@ -1,59 +1,124 @@
 import mongoose from "mongoose";
 
-const roleSchema = new mongoose.Schema({
-    roleName: {
-        type: String,
-        required: true,
-        match: [/^[A-Za-z ]+$/, "roleName must contain only alphabets"]
-    },
-    roleCode: {
-        type: String,
-        unique: true
+const roleSchema = new mongoose.Schema(
+    {
+        // ==========================================
+        // ROLE NAME
+        // ==========================================
 
-    },
-    isActive: {
-        type: Boolean,
-        required: true,
-        default: true
-    },
-    isBlock: {
-        type: Boolean,
-        required: true,
-        default: false
-    },
-    permissions: [{
-        type: String
-    }]
-}, { timestamps: true });
+        roleName: {
+            type: String,
+            required: true,
+            unique: true,
+            trim: true,
+            maxlength: 50,
+            match: [
+                /^[A-Za-z ]+$/,
+                "Role name must contain only alphabets and spaces",
+            ],
+        },
 
+        // ==========================================
+        // ROLE CODE
+        // ==========================================
 
-// Convert only roleName to Title Case
+        roleCode: {
+            type: String,
+            required: true,
+            unique: true,
+            uppercase: true,
+            trim: true,
+        },
+
+        // ==========================================
+        // ROLE PRIORITY
+        // 1 = Highest (Owner)
+        // 2 = System Admin
+        // 3+ = Custom Roles
+        // ==========================================
+
+        priority: {
+            type: Number,
+            required: true,
+            unique: true,
+            min: [1, "Priority must be a positive integer"],
+            validate: {
+                validator: Number.isInteger,
+                message: "Priority must be an integer",
+            },
+        },
+
+        // ==========================================
+        // STATUS
+        // ==========================================
+
+        isActive: {
+            type: Boolean,
+            default: true,
+        },
+
+        isBlock: {
+            type: Boolean,
+            default: false,
+        },
+
+        isBlocked: {
+            type: Boolean,
+            default: false,
+        },
+
+        isSystemRole: {
+            type: Boolean,
+            default: false,
+        },
+
+        // ==========================================
+        // RBAC PERMISSIONS
+        // Example: ['employee:read', 'resignation:approve']
+        // ==========================================
+        permissions: [{
+            type: String,
+            trim: true,
+        }],
+    },
+    {
+        timestamps: true,
+    }
+);
+
+// ==========================================
+// NORMALIZE ROLE NAME
+// ==========================================
+
 roleSchema.pre("save", function (next) {
     if (this.roleName) {
         this.roleName = this.roleName
             .trim()
-            .split(/\s+/)
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+            .replace(/\s+/g, " ")
+            .split(" ")
+            .map(
+                (word) =>
+                    word.charAt(0).toUpperCase() +
+                    word.slice(1).toLowerCase()
+            )
             .join(" ");
     }
+
     next();
 });
 
+// ==========================================
+// GENERATE ROLE CODE
+// ==========================================
 
-// Auto-generate roleCode
-roleSchema.pre("save", async function (next) {
-    if (!this.roleCode) {
-
-        const prefix = this.roleName.toUpperCase().replace(/\s+/g, "_");
-
-        const count = await this.constructor.countDocuments({
-            roleName: this.roleName
-        });
-
-        const number = String(count + 1).padStart(4, "0");
-
-        this.roleCode = `${prefix}_${number}`;
+roleSchema.pre("validate", function (next) {
+    if (!this.roleCode && this.roleName) {
+        this.roleCode = this.roleName
+            .trim()
+            .replace(/\s+/g, "_")
+            .toUpperCase();
     }
+
     next();
 });
 

@@ -1,18 +1,25 @@
 import express from "express";
 import {
   createRoleMenu,
+  bulkAssignRoleMenus,
   getAllRoleMenus,
- getRoleMenuById,
+  getRoleMenusByRoleId,
+  getRoleMenuById,
   updateRoleMenu,
   deleteRoleMenu
 } from "../Controller/RoleMenuController.js";
-import { Authendication } from "../Middleware/Auth.js";
+import { Authentication } from "../Middleware/Auth.js";
+
 const router = express.Router();
 
-router.post("/create", createRoleMenu);
-router.get("/", getAllRoleMenus);
-router.get("/role/:id", getRoleMenuById);
-router.put("/:id", updateRoleMenu);
-router.delete("/:id", deleteRoleMenu);
+router.post("/create", Authentication, createRoleMenu);
+router.post("/bulk-assign", Authentication, bulkAssignRoleMenus);
+
+router.get("/", Authentication, getAllRoleMenus);
+router.get("/role/:roleId", Authentication, getRoleMenusByRoleId);
+router.get("/:id", Authentication, getRoleMenuById);
+
+router.put("/:id", Authentication, updateRoleMenu);
+router.delete("/:id", Authentication, deleteRoleMenu);
 
 export default router;
