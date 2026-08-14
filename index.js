@@ -1,8 +1,8 @@
 import express from 'express';
 import bodyParser from 'body-parser';
-import mongoose from 'mongoose'
-import dotenv from "dotenv"
-import cors from "cors"
+import mongoose from 'mongoose';
+import dotenv from "dotenv";
+import cors from "cors";
 import user from './Routes/UserRouter.js';
 import role from './Routes/RoleRouter.js';
 import menu from './Routes/MenuRouter.js';
@@ -21,7 +21,17 @@ import task from './Routes/TaskRouter.js';
 import timeTracking from './Routes/TimeTrackingRouter.js';
 import sprint from './Routes/SprintRouter.js';
 import dashboard from './Routes/DashboardRouter.js';
-
+import passwordResetRule from './Routes/PasswordResetRuleRouter.js';
+import passwordReset from './Routes/PasswordResetRouter.js';
+import onboarding from './Routes/OnboardingRouter.js';
+import resignation from './Routes/ResignationRouter.js';
+import offboarding from './Routes/OffboardingRouter.js';
+import reimbursement from './Routes/ReimbursementRouter.js';
+import asset from './Routes/AssetRouter.js';
+import approvalWorkflow from './Routes/ApprovalWorkflowRouter.js';
+import auditLog from './Routes/AuditLogRouter.js';
+import documentSystem from './Routes/DocumentSystemRouter.js';
+import auth from './Routes/AuthRouter.js';
 
 dotenv.config();
 
@@ -36,16 +46,13 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('Connected to MongoDB...'))
   .catch(err => console.error('Could not connect to MongoDB... ' + err.message));
 
-  app.get("/", (req, res) => {
-  res.send("welcome");
-});
-
-app.use("/api/user", user)
-app.use("/api/menu", menu)
+app.use("/api/auth", auth);
+app.use("/api/user", user);
+app.use("/api/menu", menu);
 app.use("/api/experience", experience);
 app.use("/api/address", address);
-app.use("/api/role", role)
-app.use("/api/family", family)
+app.use("/api/role", role);
+app.use("/api/family", family);
 app.use("/api/rolemenu", roleMenu);
 app.use("/api/education", education);
 app.use("/api/document", document);
@@ -58,8 +65,16 @@ app.use("/api/task", task);
 app.use("/api/time-tracking", timeTracking);
 app.use("/api/sprint", sprint);
 app.use("/api/dashboard", dashboard);
-
-
+app.use("/api/password-reset-rule", passwordResetRule);
+app.use("/api/password-reset", passwordReset);
+app.use("/api/onboarding", onboarding);
+app.use("/api/resignation", resignation);
+app.use("/api/offboarding", offboarding);
+app.use("/api/reimbursement", reimbursement);
+app.use("/api/asset", asset);
+app.use("/api/approval-workflow", approvalWorkflow);
+app.use("/api/audit-log", auditLog);
+app.use("/api/v1/documents", documentSystem);
 
 const PORT = process.env.PORT || 7800;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

@@ -110,6 +110,26 @@ const documentSchema = new Schema(
       maxlength: 17,
       match: /^[0-9]{17}$/,
     },
+
+    // Additional Employee File Attachments & Verification
+    attachments: [{
+      category: {
+        type: String,
+        enum: ["OFFER_LETTER", "JOINING_DOC", "ID_PROOF", "CERTIFICATE", "EXPERIENCE_LETTER", "EXIT_DOC", "OTHER"],
+        required: true,
+      },
+      title: { type: String, required: true },
+      fileUrl: { type: String, required: true },
+      verificationStatus: {
+        type: String,
+        enum: ["PENDING", "VERIFIED", "REJECTED", "EXPIRED"],
+        default: "PENDING",
+      },
+      verifiedBy: { type: Types.ObjectId, ref: "User", default: null },
+      verifiedAt: { type: Date, default: null },
+      expiryDate: { type: Date, default: null },
+      rejectionReason: { type: String, default: null },
+    }],
   },
   {
     timestamps: true,

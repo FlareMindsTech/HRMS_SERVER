@@ -1,24 +1,33 @@
 import express from "express";
-import { deleteUser, getAllUser, getNoOwner, getUserById, login, logout, employeeInternReg, managementReg, profile, Register, updateUser } from "../Controller/UserController.js";
-import { Authendication } from "../Middleware/Auth.js";
+import {
+  deleteUser,
+  getAllUser,
+  getUserById,
+  login,
+  logout,
+  profile,
+  Register,
+  registerOwner,
+  updateUser,
+  updateUserRole,
+} from "../Controller/UserController.js";
+import { Authendication as Authentication } from "../Middleware/Auth.js";
+
 const router = express.Router();
 
-router.post("/login",login)
-router.post("/logout",Authendication,logout)
-router.get("/profile",Authendication,profile)
-// router.post("/v1/ownerReg",ownerReg)
-// router.delete("/v2/currentCompany",currentCompany)
+// Public routes
+router.post("/register-owner", registerOwner);
+router.post("/login", login);
+router.post("/v2/reg", Register);
 
-router.post("/v2/reg",  Register)
-router.post("/v2/employeeInternReg",  employeeInternReg)
-router.post("/v2/managementReg",  managementReg)
-router.put("/v2/update",  updateUser)
-router.delete("/v2/deleteUser",  deleteUser)
-router.get("/get",  getAllUser)
-router.get("/noOwner",  getNoOwner)
-router.get("/v2/getbyid/:id", getUserById)
+// Protected routes
+router.post("/logout", Authentication, logout);
+router.get("/profile", Authentication, profile);
+router.get("/get", Authentication, getAllUser);
+router.get("/v2/getbyid/:id", Authentication, getUserById);
+router.put("/v2/update", Authentication, updateUser);
+router.put("/v2/updateRole/:id", Authentication, updateUserRole);
+router.delete("/v2/deleteUser/:id", Authentication, deleteUser);
+router.delete("/v2/deleteUser", Authentication, deleteUser);
 
-
-
-
-export default router   
+export default router;

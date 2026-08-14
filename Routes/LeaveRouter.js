@@ -1,25 +1,28 @@
 import express from "express";
 import {
-    applyLeave,
-    getAllLeaves,
-    getLeavesByEmployee,
-    getLeaveById,
-    updateLeaveStatus,
-    cancelLeave,
-    deleteLeave
+  applyLeave,
+  getAllLeaves,
+  getLeavesByEmployee,
+  getLeaveById,
+  updateLeaveStatus,
+  cancelLeave,
+  deleteLeave
 } from "../Controller/LeaveController.js";
-import { Authendication } from "../Middleware/Auth.js";
+import { Authentication, checkMenuAccess } from "../Middleware/Auth.js";
 
 const router = express.Router();
 
-router.use(Authendication);
+router.use(Authentication);
 
+// Employee self leave management
 router.post("/apply", applyLeave);
-router.get("/all", getAllLeaves);
 router.get("/employee/:employeeId", getLeavesByEmployee);
 router.get("/:id", getLeaveById);
-router.put("/status/:id", updateLeaveStatus);
 router.put("/cancel/:id", cancelLeave);
-router.delete("/:id", deleteLeave);
+
+// Leave administration (Requires LEAVE_MGMT menu permission mapping)
+router.get("/all", checkMenuAccess("LEAVE_MGMT"), getAllLeaves);
+router.put("/status/:id", checkMenuAccess("LEAVE_MGMT"), updateLeaveStatus);
+router.delete("/:id", checkMenuAccess("LEAVE_MGMT"), deleteLeave);
 
 export default router;
