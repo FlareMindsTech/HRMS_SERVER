@@ -124,6 +124,133 @@ export const getProjectDetails = async (req, res) => {
     }
 };
 
+export const getAllProjects = async (req, res) => {
+    try {
+        const projects = await Project.find()
+            .populate('projectManager', 'firstName lastName email')
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({ success: true, data: projects });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const getMyProjects = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const projects = await Project.find({
+            $or: [
+                { projectManager: userId },
+                { "teamLeads.userId": userId },
+                { "softwareDevelopers.userId": userId },
+                { "interns.userId": userId },
+            ],
+        })
+            .populate('projectManager', 'firstName lastName email')
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({ success: true, data: projects });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const updateProject = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { projectName, description, startDate, endDate, status } = req.body;
+        const userId = req.user.id;
+
+        const project = await Project.findById(id);
+        if (!project) return res.status(404).json({ success: false, message: "Project not found" });
+
+        const requestor = await User.findById(userId).populate("role");
+        const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+
+        let canUpdate = false;
+        if (requestor?.isOwner) {
+            canUpdate = true;
+        } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
+            canUpdate = true;
+        }
+
+        if (!canUpdate) {
+            return res.status(403).json({ success: false, message: "Only Owner or the Project Manager can update this project" });
+        }
+
+        if (projectName !== undefined) project.projectName = projectName;
+        if (description !== undefined) project.description = description;
+        if (startDate !== undefined) project.startDate = startDate;
+        if (endDate !== undefined) project.endDate = endDate;
+        if (status !== undefined) project.status = status;
+
+        await project.save();
+
+        return res.status(200).json({
+            success: true,
+            message: "Project updated successfully",
+            data: project,
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const removeProjectMember = async (req, res) => {
+    try {
+        const { projectId, memberId, memberRole } = req.body;
+        const requestorId = req.user.id;
+
+        const project = await Project.findById(projectId);
+        if (!project) return res.status(404).json({ success: false, message: "Project not found" });
+
+        const requestor = await User.findById(requestorId).populate("role");
+        const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+
+        let isAuthorized = false;
+        if (requestor?.isOwner) {
+            isAuthorized = true;
+        } else if (requestorRoleName === "project manager") {
+            isAuthorized = true;
+        } else if (requestorRoleName === "team lead") {
+            if (["softwareDevelopers", "interns"].includes(memberRole)) {
+                isAuthorized = true;
+            }
+        }
+
+        if (!isAuthorized) {
+            return res.status(403).json({ success: false, message: "You are not authorized to remove this member" });
+        }
+
+        if (memberRole === "projectManager") {
+            if (project.projectManager && project.projectManager.toString() === memberId) {
+                project.projectManager = undefined;
+                project.projectManagerAddedBy = undefined;
+            }
+        } else if (memberRole === "teamLeads") {
+            project.teamLeads = project.teamLeads.filter(m => m.userId.toString() !== memberId);
+        } else if (memberRole === "softwareDevelopers") {
+            project.softwareDevelopers = project.softwareDevelopers.filter(m => m.userId.toString() !== memberId);
+        } else if (memberRole === "interns") {
+            project.interns = project.interns.filter(m => m.userId.toString() !== memberId);
+        } else {
+            return res.status(400).json({ success: false, message: "Invalid memberRole. Use one of: projectManager, teamLeads, softwareDevelopers, interns" });
+        }
+
+        await project.save();
+
+        return res.status(200).json({
+            success: true,
+            message: "Member removed successfully",
+            data: project,
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 export const deleteProject = async (req, res) => {
     try {
         const { id } = req.params;

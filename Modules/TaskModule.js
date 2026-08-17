@@ -7,6 +7,11 @@ const taskSchema = new mongoose.Schema(
             ref: "Project",
             required: true,
         },
+        // Newly added field: links a task to a specific sprint (optional)
+        sprintId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Sprint",
+        },
         taskName: {
             type: String,
             required: true,
