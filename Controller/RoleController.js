@@ -1,71 +1,35 @@
 import mongoose from "mongoose";
 import Role from "../Modules/RoleModules.js";
-
-// ==========================================
-// HELPER
-// ==========================================
+import Menu from "../Modules/MenuModule.js";
+import Permission from "../Modules/PermissionModule.js";
+import RoleMenu from "../Modules/RoleMenuModule.js";
+import RolePermission from "../Modules/RolePermissionModule.js";
+import User from "../Modules/UserModule.js";
+import { getAssignableRolesQuery } from "../Utils/RoleAuthority.js";
 
 const escapeRegex = (value) => {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 };
 
-// ==========================================
-// CREATE ROLE
-// ==========================================
-
-export const createRole = async (req, res) => {
+/**
+ * Create Custom Role with transactional safety
+ * Creates Role, RoleMenu mappings, and RolePermission mappings atomically.
+ */
+export const createCustomRole = async (req, res) => {
+  let createdRole = null;
   try {
-    const { roleName, priority } = req.body;
+    const { roleName, description, priority, menuIds = [], permissionCodes = [] } = req.body;
 
-    // ----------------------------------------
-    // Validate role name
-    // ----------------------------------------
-
-    if (
-      typeof roleName !== "string" ||
-      !roleName.trim()
-    ) {
+    if (!roleName || typeof roleName !== "string" || !roleName.trim()) {
       return res.status(400).json({
         success: false,
         message: "Role name is required",
       });
     }
 
-    const formattedRoleName = roleName
-      .trim()
-      .replace(/\s+/g, " ");
+    const formattedRoleName = roleName.trim().replace(/\s+/g, " ");
 
-    // ----------------------------------------
-    // Validate priority
-    // ----------------------------------------
-
-    if (
-      priority === undefined ||
-      priority === null ||
-      priority === ""
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Priority is required",
-      });
-    }
-
-    const priorityNum = Number(priority);
-
-    // ----------------------------------------
-    // Privilege escalation check: Cannot create priority 1 or system owner role
-    // ----------------------------------------
-    if (priorityNum === 1 && req.user?.priority !== 1) {
-      return res.status(403).json({
-        success: false,
-        message: "Forbidden: Only initial system setup can create System Owner role (Priority 1).",
-      });
-    }
-
-    // ----------------------------------------
     // Check duplicate role name
-    // ----------------------------------------
-
     const nameExists = await Role.exists({
       roleName: {
         $regex: `^${escapeRegex(formattedRoleName)}$`,
@@ -76,300 +40,197 @@ export const createRole = async (req, res) => {
     if (nameExists) {
       return res.status(409).json({
         success: false,
-        message: "Role name already exists",
+        message: `Role with name '${formattedRoleName}' already exists.`,
       });
     }
 
-    // ----------------------------------------
-    // Check duplicate priority
-    // ----------------------------------------
+    const roleCode = formattedRoleName.replace(/\s+/g, "_").toUpperCase();
+    const priorityNum = Number(priority) || 3;
+    const isOwner = req.user?.priority === 1 || req.user?.roleCode === "OWNER";
 
-    const priorityExists = await Role.exists({
-      priority: priorityNum,
-    });
-
-    if (priorityExists) {
-      return res.status(409).json({
-        success: false,
-        message: "Priority number already exists",
-      });
+    // Privilege escalation check: Non-Owners cannot create priority 1 or 2
+    if (!isOwner) {
+      if (priorityNum < 3) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden: Administrators can only create operational roles with Priority >= 3.",
+        });
+      }
+      if (["OWNER", "ADMIN", "HR", "EMPLOYEE"].includes(roleCode)) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden: Cannot create system or management role code.",
+        });
+      }
+      if (Array.isArray(permissionCodes) && permissionCodes.includes("*")) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden: Wildcard '*' permission cannot be assigned to custom roles by non-Owners.",
+        });
+      }
     }
 
-    // ----------------------------------------
-    // Generate role code
-    // ----------------------------------------
-
-    const roleCode = formattedRoleName
-      .replace(/\s+/g, "_")
-      .toUpperCase();
-
-    const roleCodeExists = await Role.exists({
-      roleCode,
-    });
-
-    if (roleCodeExists) {
-      return res.status(409).json({
-        success: false,
-        message: "Generated role code already exists",
-      });
-    }
-
-    // ----------------------------------------
-    // Create role
-    // ----------------------------------------
-
-    const role = await Role.create({
+    // 1. Create Role Document (system role forced to false for non-Owners)
+    createdRole = await Role.create({
       roleName: formattedRoleName,
       roleCode,
+      description: description?.trim(),
       priority: priorityNum,
+      isSystemRole: isOwner ? (req.body.isSystemRole === true) : false,
+      isActive: true,
+      permissions: permissionCodes,
     });
+
+    // 2. Create RoleMenu mappings
+    if (Array.isArray(menuIds) && menuIds.length > 0) {
+      const validMenus = await Menu.find({ _id: { $in: menuIds }, isActive: true }).select("_id");
+      const roleMenuDocs = validMenus.map((m) => ({
+        roleId: createdRole._id,
+        menuId: m._id,
+      }));
+      if (roleMenuDocs.length > 0) {
+        await RoleMenu.insertMany(roleMenuDocs, { ordered: false }).catch(() => {});
+      }
+    }
+
+    // 3. Create RolePermission mappings
+    if (Array.isArray(permissionCodes) && permissionCodes.length > 0) {
+      const validPermissions = await Permission.find({
+        permissionCode: { $in: permissionCodes },
+        isActive: true,
+      }).select("_id");
+
+      const rolePermissionDocs = validPermissions.map((p) => ({
+        roleId: createdRole._id,
+        permissionId: p._id,
+      }));
+
+      if (rolePermissionDocs.length > 0) {
+        await RolePermission.insertMany(rolePermissionDocs, { ordered: false }).catch(() => {});
+      }
+    }
 
     return res.status(201).json({
       success: true,
-      message: "Role created successfully",
-      data: role,
+      message: `Custom role '${formattedRoleName}' created successfully.`,
+      data: createdRole,
     });
   } catch (error) {
-    console.error("Create Role Error:", error);
-
-    if (error.code === 11000) {
-      const duplicateField = Object.keys(
-        error.keyPattern || {}
-      )[0];
-
-      return res.status(409).json({
-        success: false,
-        message: `${duplicateField || "Role"} already exists`,
-      });
+    // Rollback created role if an error occurs
+    if (createdRole) {
+      await Role.deleteOne({ _id: createdRole._id }).catch(() => {});
+      await RoleMenu.deleteMany({ roleId: createdRole._id }).catch(() => {});
+      await RolePermission.deleteMany({ roleId: createdRole._id }).catch(() => {});
     }
 
+    console.error("Create Custom Role Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to create role",
+      message: error.message || "Failed to create custom role.",
     });
   }
 };
 
-// ==========================================
-// GET ALL ROLES
-// ==========================================
+// Aliased export for compatibility
+export const createRole = createCustomRole;
 
-export const getAllRoles = async (req, res) => {
-  try {
-    const roles = await Role.find({
-      isActive: true,
-      isBlock: false,
-    })
-      .select(
-        "_id roleName roleCode priority isActive isBlock"
-      )
-      .sort({ priority: 1 })
-      .lean();
-
-    return res.status(200).json({
-      success: true,
-      message: "Roles fetched successfully",
-      data: roles,
-    });
-  } catch (error) {
-    console.error("Get Roles Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch roles",
-    });
-  }
-};
-
-// ==========================================
-// GET ROLE BY ID
-// ==========================================
-
-export const getRoleById = async (req, res) => {
+/**
+ * Update Role Details, Menu Access, and Permissions
+ */
+export const updateCustomRole = async (req, res) => {
   try {
     const { id } = req.params;
+    const { roleName, description, priority, isActive, menuIds, permissionCodes } = req.body;
+    const isOwner = req.user?.priority === 1 || req.user?.roleCode === "OWNER";
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid role ID",
-      });
+      return res.status(400).json({ success: false, message: "Invalid role ID" });
     }
-
-    const role = await Role.findById(id)
-      .select(
-        "_id roleName roleCode priority isActive isBlock"
-      )
-      .lean();
-
-    if (!role) {
-      return res.status(404).json({
-        success: false,
-        message: "Role not found",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Role fetched successfully",
-      data: role,
-    });
-  } catch (error) {
-    console.error("Get Role Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch role",
-    });
-  }
-};
-
-// ==========================================
-// UPDATE ROLE
-// ==========================================
-
-export const updateRole = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const {
-      roleName,
-      priority,
-      isActive,
-      isBlock,
-    } = req.body;
-
-    // ----------------------------------------
-    // Validate ID
-    // ----------------------------------------
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid role ID",
-      });
-    }
-
-    // ----------------------------------------
-    // Find role
-    // ----------------------------------------
 
     const role = await Role.findById(id);
-
     if (!role) {
-      return res.status(404).json({
-        success: false,
-        message: "Role not found",
-      });
+      return res.status(404).json({ success: false, message: "Role not found" });
     }
 
-    // ----------------------------------------
-    // Update role name
-    // ----------------------------------------
-
-    if (roleName !== undefined) {
-      if (
-        typeof roleName !== "string" ||
-        !roleName.trim()
-      ) {
-        return res.status(400).json({
+    // Prevent modifying system owner
+    if ((role.isSystemRole && role.priority === 1) || role.roleCode === "OWNER") {
+      if (!isOwner) {
+        return res.status(403).json({
           success: false,
-          message: "Invalid role name",
+          message: "Forbidden: Cannot alter System Owner configuration.",
         });
       }
+    }
 
-      const formattedRoleName = roleName
-        .trim()
-        .replace(/\s+/g, " ");
+    // Prevent non-Owners from modifying Admin, HR, or core system roles
+    if (!isOwner) {
+      if (role.priority === 2 || role.roleCode === "ADMIN") {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden: Only System Owner can modify System Admin configuration.",
+        });
+      }
+      if (role.isSystemRole || ["OWNER", "ADMIN", "HR", "EMPLOYEE"].includes(role.roleCode)) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden: Core system roles can only be modified by System Owner.",
+        });
+      }
+      if (priority !== undefined && Number(priority) < 3) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden: Cannot set role priority < 3.",
+        });
+      }
+      if (Array.isArray(permissionCodes) && permissionCodes.includes("*")) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden: Wildcard '*' permission cannot be assigned to custom roles by non-Owners.",
+        });
+      }
+    }
 
+    if (roleName) {
+      const formattedRoleName = roleName.trim().replace(/\s+/g, " ");
       const exists = await Role.exists({
         _id: { $ne: id },
-        roleName: {
-          $regex: `^${escapeRegex(formattedRoleName)}$`,
-          $options: "i",
-        },
+        roleName: { $regex: `^${escapeRegex(formattedRoleName)}$`, $options: "i" },
       });
-
       if (exists) {
-        return res.status(409).json({
-          success: false,
-          message: "Role name already exists",
-        });
+        return res.status(409).json({ success: false, message: "Role name already exists" });
       }
-
       role.roleName = formattedRoleName;
-
-      // Regenerate code only if name changes
-      const newRoleCode = formattedRoleName
-        .replace(/\s+/g, "_")
-        .toUpperCase();
-
-      const codeExists = await Role.exists({
-        _id: { $ne: id },
-        roleCode: newRoleCode,
-      });
-
-      if (codeExists) {
-        return res.status(409).json({
-          success: false,
-          message: "Generated role code already exists",
-        });
-      }
-
-      role.roleCode = newRoleCode;
     }
 
-    // ----------------------------------------
-    // Update priority
-    // ----------------------------------------
-
-    if (
-      priority !== undefined &&
-      priority !== null &&
-      priority !== ""
-    ) {
-      const priorityNum = Number(priority);
-
-      if (
-        !Number.isInteger(priorityNum) ||
-        priorityNum < 1 ||
-        priorityNum > 10
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Priority must be an integer between 1 and 10",
-        });
-      }
-
-      const priorityExists = await Role.exists({
-        _id: { $ne: id },
-        priority: priorityNum,
-      });
-
-      if (priorityExists) {
-        return res.status(409).json({
-          success: false,
-          message: "Priority number already exists",
-        });
-      }
-
-      role.priority = priorityNum;
-    }
-
-    // ----------------------------------------
-    // Status
-    // ----------------------------------------
-
-    if (typeof isActive === "boolean") {
-      role.isActive = isActive;
-    }
-
-    if (typeof isBlock === "boolean") {
-      role.isBlock = isBlock;
-    }
+    if (description !== undefined) role.description = description?.trim();
+    if (priority !== undefined) role.priority = Number(priority);
+    if (typeof isActive === "boolean") role.isActive = isActive;
+    if (Array.isArray(permissionCodes)) role.permissions = permissionCodes;
 
     await role.save();
+
+    // Sync RoleMenu mappings if menuIds is provided
+    if (Array.isArray(menuIds)) {
+      await RoleMenu.deleteMany({ roleId: id });
+      const validMenus = await Menu.find({ _id: { $in: menuIds }, isActive: true }).select("_id");
+      const roleMenuDocs = validMenus.map((m) => ({ roleId: id, menuId: m._id }));
+      if (roleMenuDocs.length > 0) {
+        await RoleMenu.insertMany(roleMenuDocs, { ordered: false }).catch(() => {});
+      }
+    }
+
+    // Sync RolePermission mappings if permissionCodes is provided
+    if (Array.isArray(permissionCodes)) {
+      await RolePermission.deleteMany({ roleId: id });
+      const validPermissions = await Permission.find({
+        permissionCode: { $in: permissionCodes },
+        isActive: true,
+      }).select("_id");
+      const rolePermissionDocs = validPermissions.map((p) => ({ roleId: id, permissionId: p._id }));
+      if (rolePermissionDocs.length > 0) {
+        await RolePermission.insertMany(rolePermissionDocs, { ordered: false }).catch(() => {});
+      }
+    }
 
     return res.status(200).json({
       success: true,
@@ -378,78 +239,169 @@ export const updateRole = async (req, res) => {
     });
   } catch (error) {
     console.error("Update Role Error:", error);
-
-    if (error.code === 11000) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Role name, role code or priority already exists",
-      });
-    }
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to update role",
-    });
+    return res.status(500).json({ success: false, message: error.message || "Failed to update role" });
   }
 };
 
-// ==========================================
-// DELETE ROLE
-// ==========================================
+export const updateRole = updateCustomRole;
 
+/**
+ * Get Complete Role Access Configuration
+ * Returns Role details, assigned menu IDs/Codes, and assigned permission IDs/Codes.
+ */
+export const getRoleAccessConfig = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid role ID" });
+    }
+
+    const role = await Role.findById(id).lean();
+    if (!role) {
+      return res.status(404).json({ success: false, message: "Role not found" });
+    }
+
+    // Retrieve assigned menus
+    const roleMenus = await RoleMenu.find({ roleId: id })
+      .populate({ path: "menuId", select: "_id menuName menuCode" })
+      .lean();
+
+    const assignedMenus = roleMenus.filter((rm) => rm.menuId).map((rm) => rm.menuId);
+
+    // Retrieve assigned permissions
+    const rolePermissions = await RolePermission.find({ roleId: id })
+      .populate({ path: "permissionId", select: "_id permissionName permissionCode module" })
+      .lean();
+
+    const assignedPermissions = rolePermissions
+      .filter((rp) => rp.permissionId)
+      .map((rp) => rp.permissionId);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        role,
+        menus: assignedMenus,
+        menuIds: assignedMenus.map((m) => m._id.toString()),
+        permissions: assignedPermissions,
+        permissionCodes: Array.from(
+          new Set([...(role.permissions || []), ...assignedPermissions.map((p) => p.permissionCode)])
+        ),
+      },
+    });
+  } catch (error) {
+    console.error("Get Role Access Config Error:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to load role configuration" });
+  }
+};
+
+export const getRoleById = getRoleAccessConfig;
+
+/**
+ * Get All Roles with summarized access stats
+ */
+export const getAllRoles = async (req, res) => {
+  try {
+    const roles = await Role.find().sort({ priority: 1, createdAt: -1 }).lean();
+
+    // Attach menu and permission counts
+    const enrichedRoles = await Promise.all(
+      roles.map(async (r) => {
+        const [menuCount, permCount, userCount] = await Promise.all([
+          RoleMenu.countDocuments({ roleId: r._id }),
+          RolePermission.countDocuments({ roleId: r._id }),
+          User.countDocuments({ role: r._id }),
+        ]);
+
+        return {
+          ...r,
+          menuCount,
+          permissionCount: Math.max(permCount, r.permissions?.length || 0),
+          userCount,
+        };
+      })
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Roles fetched successfully",
+      data: enrichedRoles,
+    });
+  } catch (error) {
+    console.error("Get All Roles Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch roles" });
+  }
+};
+
+/**
+ * Delete Role
+ * Safe delete with system role protection and active user assignment check.
+ */
 export const deleteRole = async (req, res) => {
   try {
     const { id } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid role ID",
-      });
+      return res.status(400).json({ success: false, message: "Invalid role ID" });
     }
 
-    const role = await Role.findById(id)
-      .select("_id roleName roleCode isSystemRole priority")
-      .lean();
-
+    const role = await Role.findById(id).select("_id roleName roleCode isSystemRole priority").lean();
     if (!role) {
-      return res.status(404).json({
-        success: false,
-        message: "Role not found",
-      });
+      return res.status(404).json({ success: false, message: "Role not found" });
     }
 
-    if (role.isSystemRole || role.priority === 1 || role.roleCode === "OWNER") {
+    if (role.isSystemRole || role.priority === 1 || ["OWNER", "ADMIN", "HR", "EMPLOYEE"].includes(role.roleCode)) {
       return res.status(403).json({
         success: false,
-        message: "Forbidden: System Owner role cannot be deleted.",
+        message: "Forbidden: Core system roles cannot be deleted.",
       });
     }
 
-    // IMPORTANT:
-    // Before deleting a role, check whether users
-    // are currently assigned to it.
+    // Check if users are currently assigned to this role
+    const assignedUsersCount = await User.countDocuments({ role: id });
+    if (assignedUsersCount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete role '${role.roleName}'. It is currently assigned to ${assignedUsersCount} active employee(s).`,
+      });
+    }
 
-    // Example:
-    // const assignedUsers = await User.exists({
-    //   role: id
-    // });
-
-    await Role.deleteOne({
-      _id: id,
-    });
+    // Delete role and associated mappings
+    await Role.deleteOne({ _id: id });
+    await RoleMenu.deleteMany({ roleId: id });
+    await RolePermission.deleteMany({ roleId: id });
 
     return res.status(200).json({
       success: true,
-      message: "Role deleted successfully",
+      message: `Role '${role.roleName}' deleted successfully.`,
     });
   } catch (error) {
     console.error("Delete Role Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete role" });
+  }
+};
 
+/**
+ * Get Roles available for assignment based on current user's authority
+ */
+export const getAssignableRoles = async (req, res) => {
+  try {
+    const query = getAssignableRolesQuery(req.user);
+    const roles = await Role.find(query)
+      .select("_id roleName roleCode priority description isSystemRole")
+      .sort({ priority: 1, roleName: 1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: roles,
+    });
+  } catch (error) {
+    console.error("getAssignableRoles Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to delete role",
+      message: "Failed to retrieve assignable roles",
     });
   }
 };

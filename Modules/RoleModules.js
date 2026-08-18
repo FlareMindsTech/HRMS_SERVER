@@ -5,23 +5,17 @@ const roleSchema = new mongoose.Schema(
         // ==========================================
         // ROLE NAME
         // ==========================================
-
         roleName: {
             type: String,
             required: true,
             unique: true,
             trim: true,
             maxlength: 50,
-            match: [
-                /^[A-Za-z ]+$/,
-                "Role name must contain only alphabets and spaces",
-            ],
         },
 
         // ==========================================
         // ROLE CODE
         // ==========================================
-
         roleCode: {
             type: String,
             required: true,
@@ -30,17 +24,20 @@ const roleSchema = new mongoose.Schema(
             trim: true,
         },
 
+        description: {
+            type: String,
+            trim: true,
+        },
+
         // ==========================================
         // ROLE PRIORITY
-        // 1 = Highest (Owner)
+        // 1 = Owner (Super Authority)
         // 2 = System Admin
-        // 3+ = Custom Roles
+        // 3+ = Custom Roles / Employees
         // ==========================================
-
         priority: {
             type: Number,
-            required: true,
-            unique: true,
+            default: 3,
             min: [1, "Priority must be a positive integer"],
             validate: {
                 validator: Number.isInteger,
@@ -51,7 +48,6 @@ const roleSchema = new mongoose.Schema(
         // ==========================================
         // STATUS
         // ==========================================
-
         isActive: {
             type: Boolean,
             default: true,
@@ -73,8 +69,8 @@ const roleSchema = new mongoose.Schema(
         },
 
         // ==========================================
-        // RBAC PERMISSIONS
-        // Example: ['employee:read', 'resignation:approve']
+        // RBAC PERMISSIONS (Legacy / Direct cache)
+        // Maintained alongside RolePermission collection
         // ==========================================
         permissions: [{
             type: String,
@@ -86,31 +82,28 @@ const roleSchema = new mongoose.Schema(
     }
 );
 
-// ==========================================
-// NORMALIZE ROLE NAME
-// ==========================================
-
+// Normalize Role Name
 roleSchema.pre("save", function (next) {
     if (this.roleName) {
-        this.roleName = this.roleName
-            .trim()
-            .replace(/\s+/g, " ")
-            .split(" ")
-            .map(
-                (word) =>
-                    word.charAt(0).toUpperCase() +
-                    word.slice(1).toLowerCase()
-            )
-            .join(" ");
+        const trimmed = this.roleName.trim().replace(/\s+/g, " ");
+        if (trimmed.toUpperCase() === "HR") {
+            this.roleName = "HR";
+        } else {
+            this.roleName = trimmed
+                .split(" ")
+                .map(
+                    (word) =>
+                        word.toUpperCase() === "HR"
+                            ? "HR"
+                            : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+                )
+                .join(" ");
+        }
     }
-
     next();
 });
 
-// ==========================================
-// GENERATE ROLE CODE
-// ==========================================
-
+// Generate Role Code if not provided
 roleSchema.pre("validate", function (next) {
     if (!this.roleCode && this.roleName) {
         this.roleCode = this.roleName
@@ -118,10 +111,8 @@ roleSchema.pre("validate", function (next) {
             .replace(/\s+/g, "_")
             .toUpperCase();
     }
-
     next();
 });
 
 const Role = mongoose.model("Role", roleSchema);
-
 export default Role;

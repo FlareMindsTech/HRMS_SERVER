@@ -5,6 +5,8 @@ import mongoose from "mongoose";
 import User from "../Modules/UserModule.js";
 import Role from "../Modules/RoleModules.js";
 import Attendance from "../Modules/AttendanceModule.js";
+import { canAssignRole, canModifyUserAccount } from "../Utils/RoleAuthority.js";
+import { logAudit } from "../Utils/AuditLogger.js";
 
 const SALT_ROUNDS = 10;
 
@@ -33,9 +35,9 @@ const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
     Math.max(
       0,
       Math.sin(dLat / 2) ** 2 +
-        Math.cos(lat1 * rad) *
-          Math.cos(lat2 * rad) *
-          Math.sin(dLon / 2) ** 2
+      Math.cos(lat1 * rad) *
+      Math.cos(lat2 * rad) *
+      Math.sin(dLon / 2) ** 2
     )
   );
 
@@ -364,8 +366,8 @@ export const login = async (req, res) => {
     })
       .select(
         "+password " +
-          "_id firstName lastName email mobileNo " +
-          "employeeCode role tlCode isActive isBlocked wfh"
+        "_id firstName lastName email mobileNo " +
+        "employeeCode role tlCode isActive isBlocked wfh hasLoginAccess"
       )
       .lean();
 
@@ -393,7 +395,7 @@ export const login = async (req, res) => {
     }
 
     // ==================================================
-    // USER STATUS
+    // USER STATUS & LOGIN PROVISIONING CHECK
     // ==================================================
 
     if (user.isBlocked) {
@@ -407,6 +409,13 @@ export const login = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: "Your account is inactive",
+      });
+    }
+
+    if (user.hasLoginAccess === false) {
+      return res.status(403).json({
+        success: false,
+        message: "Login access has not been provisioned for this employee. Please contact HR or your administrator.",
       });
     }
 
@@ -455,108 +464,6 @@ export const login = async (req, res) => {
     }
 
     // ==================================================
-    // GPS / OFFICE LOCATION
-    // ==================================================
-
-    const userLatitude = Number(latitude);
-    const userLongitude = Number(longitude);
-
-    const hasValidLocation =
-      Number.isFinite(userLatitude) &&
-      Number.isFinite(userLongitude) &&
-      userLatitude >= -90 &&
-      userLatitude <= 90 &&
-      userLongitude >= -180 &&
-      userLongitude <= 180;
-
-    if (!hasValidLocation) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Valid latitude and longitude are required for login",
-      });
-    }
-
-    // ==================================================
-    // OFFICE CONFIGURATION
-    // ==================================================
-
-    const officeLatitude = Number(
-      process.env.OFFICE_LATITUDE
-    );
-
-    const officeLongitude = Number(
-      process.env.OFFICE_LONGITUDE
-    );
-
-    const officeRadius = Number(
-      process.env.OFFICE_RADIUS_METERS || 200
-    );
-
-    if (
-      !Number.isFinite(officeLatitude) ||
-      !Number.isFinite(officeLongitude) ||
-      !Number.isFinite(officeRadius) ||
-      officeRadius <= 0
-    ) {
-      console.error("Invalid office location configuration");
-
-      return res.status(500).json({
-        success: false,
-        message:
-          "Office location is not configured correctly",
-      });
-    }
-
-    // ==================================================
-    // CALCULATE DISTANCE
-    // ==================================================
-
-    const distance = getDistanceInMeters(
-      userLatitude,
-      userLongitude,
-      officeLatitude,
-      officeLongitude
-    );
-
-    if (distance === null) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Unable to calculate distance from office",
-      });
-    }
-
-    // ==================================================
-    // DETERMINE OFFICE / WFH
-    // ==================================================
-
-    const isAtOffice = distance <= officeRadius;
-
-    let locationType;
-
-    if (isAtOffice) {
-      locationType = "Office";
-    } else {
-      locationType = "WFH";
-
-      // ==================================================
-      // WFH APPROVAL CHECK
-      // ==================================================
-
-      if (user.wfh?.isApproved !== true) {
-        return res.status(403).json({
-          success: false,
-          message:
-            "You are outside the office location and do not have WFH approval",
-          locationType: "WFH",
-          distance: Math.round(distance),
-          allowedRadius: officeRadius,
-        });
-      }
-    }
-
-    // ==================================================
     // JWT SECRET
     // ==================================================
 
@@ -589,51 +496,19 @@ export const login = async (req, res) => {
     );
 
     // ==================================================
-    // LAST LOGIN
+    // LAST LOGIN TIMESTAMP
     // ==================================================
 
     const now = new Date();
-    const dateString = getTodayString();
-
-    const updateData = {
-      lastLoginAt: now,
-      lastLoginLocation: {
-        latitude: userLatitude,
-        longitude: userLongitude,
-        timestamp: now,
-        locationType,
-        distanceFromOffice: Math.round(distance),
-      },
-    };
 
     await User.updateOne(
       {
         _id: user._id,
       },
       {
-        $set: updateData,
+        $set: { lastLoginAt: now },
       }
     );
-
-    // ==================================================
-    // ATTENDANCE
-    // ==================================================
-
-    const existingAttendance =
-      await Attendance.findOne({
-        userId: user._id,
-        date: dateString,
-      });
-
-    if (!existingAttendance) {
-      await Attendance.create({
-        userId: user._id,
-        date: dateString,
-        loginTime: now,
-        locationType,
-        status: "Present",
-      });
-    }
 
     // ==================================================
     // LOGIN SUCCESS
@@ -645,15 +520,7 @@ export const login = async (req, res) => {
       .json({
         success: true,
         message: "Login successful",
-
         token,
-
-        location: {
-          type: locationType,
-          distanceFromOffice: Math.round(distance),
-          allowedRadius: officeRadius,
-        },
-
         user: {
           id: user._id,
           employeeCode: user.employeeCode,
@@ -677,73 +544,21 @@ export const login = async (req, res) => {
     });
   }
 };
+
 // ======================================================
 // LOGOUT
 // ======================================================
 
 export const logout = async (req, res) => {
   try {
-    const userId = req.user.id;
-    const now = new Date();
-    const dateString = getTodayString();
-
-    const attendance = await Attendance.findOne({
-      userId,
-      date: dateString,
-    });
-
-    if (!attendance) {
-      return res.status(404).json({
-        message: "Today's attendance not found",
-      });
-    }
-
-    if (attendance.logoutTime) {
-      return res.status(400).json({
-        message: "Already logged out",
-      });
-    }
-
-    const loginTime = new Date(attendance.loginTime);
-
-    const totalMinutes = Math.floor(
-      (now - loginTime) / 60000
-    );
-
-    let status = "Absent";
-
-    if (totalMinutes >= 510) {
-      status = "Present";
-    } else if (totalMinutes >= 240) {
-      status = "Half Day";
-    }
-
-    await Attendance.updateOne(
-      { _id: attendance._id },
-      {
-        $set: {
-          logoutTime: now,
-          totalWorkingMinutes: totalMinutes,
-          totalHours: Number(
-            (totalMinutes / 60).toFixed(2)
-          ),
-          status,
-        },
-      }
-    );
-
     return res.status(200).json({
+      success: true,
       message: "Logout successful",
-      totalWorkingMinutes: totalMinutes,
-      totalHours: Number(
-        (totalMinutes / 60).toFixed(2)
-      ),
-      status,
     });
   } catch (error) {
     console.error("Logout Error:", error);
-
     return res.status(500).json({
+      success: false,
       message: "Logout failed",
     });
   }
@@ -758,9 +573,9 @@ export const profile = async (req, res) => {
     const user = await User.findById(req.user.id)
       .select(
         "firstName middleName lastName email dob gender " +
-          "marriageStatus bloodGroup mobileNo employeeCode " +
-          "role tlCode isActive isBlocked wfh " +
-          "lastLoginAt lastLoginLocation"
+        "marriageStatus bloodGroup mobileNo employeeCode " +
+        "role tlCode isActive isBlocked wfh " +
+        "lastLoginAt lastLoginLocation"
       )
       .populate({
         path: "role",
@@ -787,6 +602,46 @@ export const profile = async (req, res) => {
 
     return res.status(500).json({
       message: "Failed to fetch profile",
+    });
+  }
+};
+
+// ======================================================
+// GET AUTHENTICATED ACCESS CONTEXT (/api/auth/me)
+// Returns user profile, active menus, and active permissions
+// ======================================================
+
+export const getAuthContext = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select("firstName lastName email employeeCode role isActive isBlocked")
+      .populate("role", "roleName roleCode priority isSystemRole")
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user: {
+          id: req.user.id,
+          employeeCode: req.user.employeeCode,
+          firstName: user?.firstName || "",
+          lastName: user?.lastName || "",
+          email: user?.email || "",
+          roleId: req.user.roleId,
+          roleName: req.user.roleName,
+          roleCode: req.user.roleCode,
+          priority: req.user.priority,
+          isSystemRole: req.user.isSystemRole,
+        },
+        menus: req.user.menus || [],
+        permissions: req.user.permissions || [],
+      },
+    });
+  } catch (error) {
+    console.error("Get Auth Context Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to retrieve access context",
     });
   }
 };
@@ -876,11 +731,13 @@ export const getAllUser = async (req, res) => {
       User.find(filter)
         .select(
           "firstName middleName lastName email mobileNo " +
-            "employeeCode role tlCode isActive isBlocked wfh"
+          "employeeCode role tlCode isActive isBlocked wfh " +
+          "hasLoginAccess accountProvisionedAt accountProvisionedBy " +
+          "department designation lifecycleStatus joiningDate"
         )
         .populate({
           path: "role",
-          select: "roleName",
+          select: "roleName roleCode priority isSystemRole",
         })
         .populate({
           path: "tlCode",
@@ -930,9 +787,9 @@ export const getUserById = async (req, res) => {
     const user = await User.findById(id)
       .select(
         "firstName middleName lastName email dob gender " +
-          "marriageStatus bloodGroup mobileNo employeeCode " +
-          "role tlCode isActive isBlocked wfh " +
-          "lastLoginAt lastLoginLocation"
+        "marriageStatus bloodGroup mobileNo employeeCode " +
+        "role tlCode isActive isBlocked wfh " +
+        "lastLoginAt lastLoginLocation"
       )
       .populate({
         path: "role",
@@ -1046,8 +903,8 @@ export const updateUser = async (req, res) => {
       )
         .select(
           "firstName middleName lastName email dob gender " +
-            "marriageStatus bloodGroup mobileNo employeeCode " +
-            "role tlCode isActive isBlocked wfh"
+          "marriageStatus bloodGroup mobileNo employeeCode " +
+          "role tlCode isActive isBlocked wfh"
         )
         .lean();
 
@@ -1078,6 +935,226 @@ export const updateUser = async (req, res) => {
 };
 
 // ======================================================
+// PROVISION LOGIN ACCOUNT
+// ======================================================
+
+export const provisionAccount = async (req, res) => {
+  try {
+    const { employeeId, roleId, password, isActive } = req.body;
+
+    if (!employeeId || !mongoose.Types.ObjectId.isValid(employeeId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid employee ID is required",
+      });
+    }
+
+    if (!roleId || !mongoose.Types.ObjectId.isValid(roleId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid role ID is required",
+      });
+    }
+
+    // 1. Verify target employee exists
+    const employee = await User.findById(employeeId);
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee record not found",
+      });
+    }
+
+    // 2. Prevent duplicate account provisioning
+    if (employee.hasLoginAccess === true) {
+      return res.status(400).json({
+        success: false,
+        message: "Login account already exists for this employee.",
+      });
+    }
+
+    // 3. Verify target role exists
+    const targetRole = await Role.findById(roleId).lean();
+    if (!targetRole) {
+      return res.status(404).json({
+        success: false,
+        message: "Requested role not found",
+      });
+    }
+
+    // 4. Centralized Role Assignment Authority Check
+    if (!canAssignRole(req.user, targetRole)) {
+      return res.status(403).json({
+        success: false,
+        message: `Forbidden: You do not have authority to assign role '${targetRole.roleName}'.`,
+      });
+    }
+
+    // 5. Hash initial password
+    const rawPassword = password && password.trim() ? password.trim() : "Welcome@123";
+    if (rawPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long",
+      });
+    }
+    const hashedPassword = await bcrypt.hash(rawPassword, 10);
+
+    // 6. Provision the account
+    employee.password = hashedPassword;
+    employee.role = targetRole._id;
+    employee.hasLoginAccess = true;
+    employee.accountProvisionedAt = new Date();
+    employee.accountProvisionedBy = req.user.id;
+    employee.isActive = isActive !== undefined ? isActive : true;
+    if (employee.lifecycleStatus === "ONBOARDING") {
+      employee.lifecycleStatus = "ACTIVE";
+    }
+
+    await employee.save();
+
+    await logAudit({
+      req,
+      action: "PROVISION_USER_ACCOUNT",
+      module: "USER_MANAGEMENT",
+      resourceId: employee._id.toString(),
+      details: `Provisioned login account for ${employee.employeeCode} (${employee.email}) with role ${targetRole.roleName}`,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: `Login account provisioned successfully for ${employee.firstName} ${employee.lastName}.`,
+      data: {
+        id: employee._id,
+        employeeCode: employee.employeeCode,
+        email: employee.email,
+        roleId: targetRole._id,
+        roleName: targetRole.roleName,
+        hasLoginAccess: employee.hasLoginAccess,
+        isActive: employee.isActive,
+      },
+    });
+  } catch (error) {
+    console.error("provisionAccount Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to provision login account",
+      error: error.message,
+    });
+  }
+};
+
+// ======================================================
+// UPDATE ACCOUNT STATUS (Activate / Deactivate / Block)
+// ======================================================
+
+export const updateAccountStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isActive, isBlocked } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const employee = await User.findById(id).populate("role");
+    if (!employee) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Security check: Verify caller can modify target user
+    if (!canModifyUserAccount(req.user, employee.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not have authority to modify this user account.",
+      });
+    }
+
+    if (isActive !== undefined) employee.isActive = isActive;
+    if (isBlocked !== undefined) employee.isBlocked = isBlocked;
+
+    await employee.save();
+
+    await logAudit({
+      req,
+      action: "UPDATE_ACCOUNT_STATUS",
+      module: "USER_MANAGEMENT",
+      resourceId: employee._id.toString(),
+      details: `Updated account status for ${employee.employeeCode} (isActive=${employee.isActive}, isBlocked=${employee.isBlocked})`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Account status updated successfully",
+      data: {
+        id: employee._id,
+        employeeCode: employee.employeeCode,
+        isActive: employee.isActive,
+        isBlocked: employee.isBlocked,
+      },
+    });
+  } catch (error) {
+    console.error("updateAccountStatus Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ======================================================
+// RESET ACCOUNT CREDENTIALS
+// ======================================================
+
+export const resetAccountCredentials = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { password } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    if (!password || password.trim().length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long",
+      });
+    }
+
+    const employee = await User.findById(id).populate("role");
+    if (!employee) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Security check: Verify caller can modify target user
+    if (!canModifyUserAccount(req.user, employee.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: You do not have authority to reset credentials for this account.",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password.trim(), 10);
+    employee.password = hashedPassword;
+    await employee.save();
+
+    await logAudit({
+      req,
+      action: "RESET_USER_PASSWORD",
+      module: "USER_MANAGEMENT",
+      resourceId: employee._id.toString(),
+      details: `Reset password for employee ${employee.employeeCode}`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Password reset successfully for ${employee.firstName} ${employee.lastName}.`,
+    });
+  } catch (error) {
+    console.error("resetAccountCredentials Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ======================================================
 // UPDATE ROLE
 // ======================================================
 
@@ -1098,11 +1175,27 @@ export const updateUserRole = async (req, res) => {
       });
     }
 
-    const roleDoc = await Role.findOne({
-      roleName: role,
-    })
-      .select("_id roleName")
-      .lean();
+    const user = await User.findById(id).populate("role");
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    // 1. Check if caller can modify this user account (e.g. non-owners cannot modify Owner)
+    if (!canModifyUserAccount(req.user, user.role)) {
+      return res.status(403).json({
+        message: "Forbidden: You do not have authority to modify this user account.",
+      });
+    }
+
+    // 2. Find target role
+    let roleDoc;
+    if (mongoose.Types.ObjectId.isValid(role)) {
+      roleDoc = await Role.findById(role).lean();
+    } else {
+      roleDoc = await Role.findOne({ roleName: role }).lean();
+    }
 
     if (!roleDoc) {
       return res.status(400).json({
@@ -1110,36 +1203,38 @@ export const updateUserRole = async (req, res) => {
       });
     }
 
-    const user = await User.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          role: roleDoc._id,
-        },
-      },
-      {
-        new: true,
-        runValidators: true,
-      }
-    )
-      .select("employeeCode role")
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found",
+    // 3. Check if caller has authority to assign this target role
+    if (!canAssignRole(req.user, roleDoc)) {
+      return res.status(403).json({
+        message: `Forbidden: You do not have authority to assign role '${roleDoc.roleName}'.`,
       });
     }
 
+    user.role = roleDoc._id;
+    await user.save();
+
+    await logAudit({
+      req,
+      action: "UPDATE_USER_ROLE",
+      module: "USER_MANAGEMENT",
+      resourceId: user._id.toString(),
+      details: `Reassigned role for ${user.employeeCode} to ${roleDoc.roleName}`,
+    });
+
     return res.status(200).json({
       message: "Role updated successfully",
-      data: user,
+      data: {
+        id: user._id,
+        employeeCode: user.employeeCode,
+        role: roleDoc._id,
+        roleName: roleDoc.roleName,
+      },
     });
   } catch (error) {
     console.error("Update Role Error:", error);
-
     return res.status(500).json({
       message: "Failed to update role",
+      error: error.message,
     });
   }
 };
@@ -1158,24 +1253,38 @@ export const deleteUser = async (req, res) => {
       });
     }
 
-    const user = await User.findByIdAndDelete(id)
-      .select("_id employeeCode")
-      .lean();
-
+    const user = await User.findById(id).populate("role");
     if (!user) {
       return res.status(404).json({
         message: "User not found",
       });
     }
 
+    // Protect against non-owners deleting Owner
+    if (!canModifyUserAccount(req.user, user.role)) {
+      return res.status(403).json({
+        message: "Forbidden: You do not have authority to delete this user account.",
+      });
+    }
+
+    await User.findByIdAndDelete(id);
+
+    await logAudit({
+      req,
+      action: "DELETE_USER",
+      module: "USER_MANAGEMENT",
+      resourceId: id.toString(),
+      details: `Deleted user ${user.employeeCode} (${user.email})`,
+    });
+
     return res.status(200).json({
       message: "User deleted successfully",
     });
   } catch (error) {
     console.error("Delete User Error:", error);
-
     return res.status(500).json({
       message: "Failed to delete user",
+      error: error.message,
     });
   }
 };

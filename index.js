@@ -32,6 +32,8 @@ import approvalWorkflow from './Routes/ApprovalWorkflowRouter.js';
 import auditLog from './Routes/AuditLogRouter.js';
 import documentSystem from './Routes/DocumentSystemRouter.js';
 import auth from './Routes/AuthRouter.js';
+import permission from './Routes/PermissionRouter.js';
+import { seedRBACFoundation } from './Services/PermissionSeedService.js';
 
 dotenv.config();
 
@@ -43,10 +45,15 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 mongoose.set('strictQuery', false);
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('Connected to MongoDB...'))
+  .then(async () => {
+    console.log('Connected to MongoDB...');
+    // Initialize RBAC foundation catalog and standard mappings safely
+    await seedRBACFoundation();
+  })
   .catch(err => console.error('Could not connect to MongoDB... ' + err.message));
 
 app.use("/api/auth", auth);
+app.use("/api/permission", permission);
 app.use("/api/user", user);
 app.use("/api/menu", menu);
 app.use("/api/experience", experience);

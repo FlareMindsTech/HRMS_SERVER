@@ -7,21 +7,26 @@ import {
     getAllProjects,
     getMyProjects,
     updateProject,
-    removeProjectMember
+    removeProjectMember,
 } from "../Controller/ProjectController.js";
-import { Authendication } from "../Middleware/Auth.js";
+import { Authentication, requirePermission } from "../Middleware/Auth.js";
 
 const router = express.Router();
 
-router.post("/create", Authendication, createProject);
-router.post("/addMember", Authendication, addProjectMember);
-router.get("/getProjectDetails/:id", Authendication, getProjectDetails);
-router.delete("/deleteProject/:id", Authendication, deleteProject);
+router.use(Authentication);
 
-// Newly added routes
-router.get("/getAllProjects", Authendication, getAllProjects);
-router.get("/getMyProjects", Authendication, getMyProjects);
-router.put("/updateProject/:id", Authendication, updateProject);
-router.post("/removeMember", Authendication, removeProjectMember);
+// Read Projects & Details
+router.get("/getAllProjects", requirePermission("project.read"), getAllProjects);
+router.get("/getMyProjects", requirePermission("project.read"), getMyProjects);
+router.get("/getProjectDetails/:id", requirePermission("project.read"), getProjectDetails);
+
+// Project Mutations (RBAC Protected)
+router.post("/create", requirePermission("project.create"), createProject);
+router.put("/updateProject/:id", requirePermission("project.update"), updateProject);
+router.delete("/deleteProject/:id", requirePermission("project.delete"), deleteProject);
+
+// Member Management (RBAC Protected)
+router.post("/addMember", requirePermission("project.add_member"), addProjectMember);
+router.post("/removeMember", requirePermission("project.remove_member"), removeProjectMember);
 
 export default router;

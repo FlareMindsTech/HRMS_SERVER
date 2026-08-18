@@ -19,7 +19,9 @@ const auditLogSchema = new mongoose.Schema(
       required: true,
       enum: [
         "USER",
+        "USER_MANAGEMENT",
         "ROLE",
+        "ROLE_MANAGEMENT",
         "ONBOARDING",
         "RESIGNATION",
         "OFFBOARDING",
@@ -29,6 +31,8 @@ const auditLogSchema = new mongoose.Schema(
         "APPROVAL_WORKFLOW",
         "LEAVE",
         "ATTENDANCE",
+        "PROJECT",
+        "PROJECTS",
       ],
       index: true,
     },
