@@ -48,8 +48,10 @@ export const addProjectMember = async (req, res) => {
         let isAuthorized = false;
         let targetArray = null;
 
-        if (requestor.isOwner) {
-            // Owner can add any role
+        const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
+
+        if (isOwnerOrAdmin) {
+            // Owner / Admin can add any role
             isAuthorized = true;
         } else {
             const requestorRoleName = requestor.role?.roleName?.toLowerCase() || "";
@@ -170,7 +172,7 @@ export const updateProject = async (req, res) => {
         const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
 
         let canUpdate = false;
-        if (requestor?.isOwner) {
+        if (requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*")) {
             canUpdate = true;
         } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
             canUpdate = true;
@@ -210,7 +212,9 @@ export const removeProjectMember = async (req, res) => {
         const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
 
         let isAuthorized = false;
-        if (requestor?.isOwner) {
+        const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
+
+        if (isOwnerOrAdmin) {
             isAuthorized = true;
         } else if (requestorRoleName === "project manager") {
             isAuthorized = true;
@@ -261,9 +265,10 @@ export const deleteProject = async (req, res) => {
 
         const requestor = await User.findById(userId).populate("role");
         const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+        const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
 
         let canDelete = false;
-        if (requestor?.isOwner) {
+        if (isOwnerOrAdmin) {
             canDelete = true;
         } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
             canDelete = true;

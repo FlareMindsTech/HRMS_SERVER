@@ -114,8 +114,25 @@ const userSchema = new mongoose.Schema(
     },
 
     // =========================
-    // ACCOUNT STATUS
+    // ACCOUNT STATUS & PROVISIONING
     // =========================
+
+    hasLoginAccess: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    accountProvisionedAt: {
+      type: Date,
+      default: null,
+    },
+
+    accountProvisionedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
 
     isActive: {
       type: Boolean,

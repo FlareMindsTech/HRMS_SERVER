@@ -4,6 +4,7 @@ import Role from "../Modules/RoleModules.js";
 import bcrypt from "bcrypt";
 import { logAudit } from "../Utils/AuditLogger.js";
 import { getPagination, formatPaginatedResponse } from "../Utils/Pagination.js";
+import { canAssignRole } from "../Utils/RoleAuthority.js";
 
 // Helper to generate next unique Employee Code EMP0001
 const generateNextEmployeeCode = async () => {
@@ -61,28 +62,39 @@ export const initiateOnboarding = async (req, res) => {
       });
     }
 
-    const role = await Role.findById(roleId);
-    if (!role) {
-      return res.status(404).json({ success: false, message: "Specified Role ID not found." });
+    let role;
+    if (roleId) {
+      role = await Role.findById(roleId);
+      if (!role) {
+        return res.status(404).json({ success: false, message: "Specified Role ID not found." });
+      }
+      if (!canAssignRole(req.user, role)) {
+        return res.status(403).json({
+          success: false,
+          message: `Forbidden: You do not have authority to assign role '${role.roleName}'.`,
+        });
+      }
+    } else {
+      role = await Role.findOne({ roleCode: "EMPLOYEE" });
     }
 
     const employeeCode = await generateNextEmployeeCode();
     const rawPassword = password || "Welcome@123";
     const hashedPassword = await bcrypt.hash(rawPassword, 10);
 
-    // Create User with ONBOARDING status
+    // Create User with ONBOARDING status and hasLoginAccess = false by default
     const newUser = await User.create({
       firstName,
       middleName,
       lastName,
-      email,
+      email: email.toLowerCase().trim(),
       password: hashedPassword,
-      dob,
+      dob: new Date(dob),
       gender,
       marriageStatus,
-      mobileNo,
+      mobileNo: mobileNo.trim(),
       employeeCode,
-      role: roleId,
+      role: role ? role._id : null,
       reportingManager: reportingManager || null,
       tlCode: reportingManager || null,
       department: department || "General",
@@ -90,6 +102,7 @@ export const initiateOnboarding = async (req, res) => {
       joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
       employmentType: employmentType || "FULL_TIME",
       lifecycleStatus: "ONBOARDING",
+      hasLoginAccess: false,
       bankDetails: bankDetails || {},
       statutoryDetails: statutoryDetails || {},
       emergencyContact: emergencyContact || {},
