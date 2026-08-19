@@ -218,6 +218,32 @@ export const STANDARD_PERMISSIONS = [
     module: "LEAVE_MGMT",
     description: "Approve or reject employee leave applications",
   },
+
+  // ── ASSET MANAGEMENT MODULE ──
+  {
+    permissionName: "Read Assets",
+    permissionCode: "asset.read",
+    module: "ASSET",
+    description: "View company asset inventory and allocations",
+  },
+  {
+    permissionName: "Create Asset",
+    permissionCode: "asset.create",
+    module: "ASSET",
+    description: "Add new assets to the company inventory",
+  },
+  {
+    permissionName: "Assign Asset",
+    permissionCode: "asset.assign",
+    module: "ASSET",
+    description: "Allocate inventory assets to employees",
+  },
+  {
+    permissionName: "Return Asset",
+    permissionCode: "asset.return",
+    module: "ASSET",
+    description: "Process return of assigned assets back to inventory",
+  },
 ];
 
 export const STANDARD_MENUS = [
@@ -230,6 +256,7 @@ export const STANDARD_MENUS = [
   { menuName: "Payslip", menuCode: "PAYSLIP" },
   { menuName: "EPFO", menuCode: "EPFO" },
   { menuName: "MIS", menuCode: "MIS" },
+  { menuName: "Assets", menuCode: "ASSETS" },
 ];
 
 /**
@@ -279,7 +306,6 @@ export const seedRBACFoundation = async () => {
         roleCode: "OWNER",
         priority: 1,
         isSystemRole: true,
-        permissions: ["*"],
         description: "Primary system administrator with unrestricted access",
       });
     }
@@ -291,7 +317,6 @@ export const seedRBACFoundation = async () => {
         roleCode: "ADMIN",
         priority: 2,
         isSystemRole: true,
-        permissions: ["*"],
         description: "Administrative authority with full organizational access",
       });
     }
@@ -305,21 +330,11 @@ export const seedRBACFoundation = async () => {
         roleCode: "EMPLOYEE",
         priority: 3,
         isSystemRole: true,
-        permissions: [
-          "attendance.read.own",
-          "attendance.punch_in",
-          "attendance.punch_out",
-          "project.read",
-          "user.read_own",
-          "leave.read.own",
-          "leave.apply",
-          "leave.cancel",
-        ],
         description: "Standard employee role with self-service access",
       });
     }
 
-    // 3. HR Role Seeding / Migration to Protected Standard System Role
+    // HR Role Seeding / Migration to Protected Standard System Role
     const hrPermCodes = [
       "user.read",
       "user.read_own",
@@ -331,6 +346,10 @@ export const seedRBACFoundation = async () => {
       "onboarding.complete",
       "attendance.read.all",
       "attendance.read.own",
+      "asset.read",
+      "asset.create",
+      "asset.assign",
+      "asset.return",
     ];
 
     const existingHrRoles = await Role.find({
@@ -347,8 +366,7 @@ export const seedRBACFoundation = async () => {
       hrRole.isActive = true;
       hrRole.isBlock = false;
       hrRole.isBlocked = false;
-      hrRole.permissions = hrPermCodes;
-      hrRole.description = "Protected standard HR role with employee onboarding, account provisioning, and attendance management";
+      hrRole.description = "Protected standard HR role with employee onboarding, account provisioning, attendance management, and asset allocation";
       await hrRole.save();
 
       // Clean up duplicate HR roles if any exist, reassigning users to the primary hrRole
@@ -370,8 +388,7 @@ export const seedRBACFoundation = async () => {
         isActive: true,
         isBlock: false,
         isBlocked: false,
-        permissions: hrPermCodes,
-        description: "Protected standard HR role with employee onboarding, account provisioning, and attendance management",
+        description: "Protected standard HR role with employee onboarding, account provisioning, attendance management, and asset allocation",
       });
     }
 
@@ -394,8 +411,8 @@ export const seedRBACFoundation = async () => {
       }
     }
 
-    // HR gets DASHBOARD, ATTENDANCE, USER_MANAGEMENT
-    const hrMenuCodes = ["DASHBOARD", "ATTENDANCE", "USER_MANAGEMENT"];
+    // HR gets DASHBOARD, ATTENDANCE, USER_MANAGEMENT, ASSETS
+    const hrMenuCodes = ["DASHBOARD", "ATTENDANCE", "USER_MANAGEMENT", "ASSETS"];
     const hrMenus = seededMenus.filter((m) => hrMenuCodes.includes(m.menuCode));
     if (hrRole) {
       // Remove any unwanted menus from HR
@@ -428,7 +445,7 @@ export const seedRBACFoundation = async () => {
       }
     }
 
-    // 5. Map Permissions to Roles in RolePermission collection
+    // 5. Map Permissions to Roles in RolePermission collection (Single Source of Truth)
     // Owner & Admin get all permissions
     for (const perm of seededPermissions) {
       if (ownerRole) {
@@ -502,13 +519,34 @@ export const seedRBACFoundation = async () => {
       }
     }
 
-    // 6. Ensure existing active users have hasLoginAccess: true
+    // 6. Safe Data Migration: ensure all legacy Role.permissions are migrated to RolePermission
+    const allExistingRawRoles = await Role.collection.find({}).toArray();
+    for (const r of allExistingRawRoles) {
+      if (Array.isArray(r.permissions) && r.permissions.length > 0) {
+        const legacyCodes = r.permissions.filter((c) => c !== "*");
+        if (legacyCodes.length > 0) {
+          const matchingPerms = await Permission.find({ permissionCode: { $in: legacyCodes }, isActive: true }).select("_id");
+          for (const mp of matchingPerms) {
+            await RolePermission.findOneAndUpdate(
+              { roleId: r._id, permissionId: mp._id },
+              { $setOnInsert: { roleId: r._id, permissionId: mp._id } },
+              { upsert: true }
+            );
+          }
+        }
+      }
+    }
+
+    // Remove deprecated permissions field from all Role documents in MongoDB directly
+    await Role.collection.updateMany({}, { $unset: { permissions: "" } });
+
+    // 7. Ensure existing active users have hasLoginAccess: true
     await User.updateMany(
       { hasLoginAccess: { $exists: false }, isActive: true },
       { $set: { hasLoginAccess: true } }
     );
 
-    console.log("RBAC Foundation seeded successfully (Permissions, Menus, Role Mappings).");
+    console.log("RBAC Foundation seeded successfully (Permissions, Menus, Role Mappings - RolePermission is Single Source of Truth).");
     return { success: true, permissionsCount: seededPermissions.length, menusCount: seededMenus.length };
   } catch (error) {
     console.error("RBAC Seeding Error:", error);

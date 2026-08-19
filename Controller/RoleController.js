@@ -78,7 +78,6 @@ export const createCustomRole = async (req, res) => {
       priority: priorityNum,
       isSystemRole: isOwner ? (req.body.isSystemRole === true) : false,
       isActive: true,
-      permissions: permissionCodes,
     });
 
     // 2. Create RoleMenu mappings
@@ -205,7 +204,6 @@ export const updateCustomRole = async (req, res) => {
     if (description !== undefined) role.description = description?.trim();
     if (priority !== undefined) role.priority = Number(priority);
     if (typeof isActive === "boolean") role.isActive = isActive;
-    if (Array.isArray(permissionCodes)) role.permissions = permissionCodes;
 
     await role.save();
 
@@ -285,9 +283,7 @@ export const getRoleAccessConfig = async (req, res) => {
         menus: assignedMenus,
         menuIds: assignedMenus.map((m) => m._id.toString()),
         permissions: assignedPermissions,
-        permissionCodes: Array.from(
-          new Set([...(role.permissions || []), ...assignedPermissions.map((p) => p.permissionCode)])
-        ),
+        permissionCodes: assignedPermissions.map((p) => p.permissionCode),
       },
     });
   } catch (error) {
@@ -317,7 +313,7 @@ export const getAllRoles = async (req, res) => {
         return {
           ...r,
           menuCount,
-          permissionCount: Math.max(permCount, r.permissions?.length || 0),
+          permissionCount: permCount,
           userCount,
         };
       })

@@ -67,15 +67,6 @@ const roleSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
-
-        // ==========================================
-        // RBAC PERMISSIONS (Legacy / Direct cache)
-        // Maintained alongside RolePermission collection
-        // ==========================================
-        permissions: [{
-            type: String,
-            trim: true,
-        }],
     },
     {
         timestamps: true,

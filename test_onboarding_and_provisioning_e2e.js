@@ -226,18 +226,15 @@ async function runOnboardingAndProvisioningSuite() {
     "attendance.read.all",
     "attendance.read.own",
   ];
-  const hrHasAllPerms = requiredHrPerms.every((p) => hrRole?.permissions?.includes(p));
-  test("HR has all required standard permissions", hrHasAllPerms);
 
-  test("HR does NOT have user.manage_roles", !hrRole?.permissions?.includes("user.manage_roles"));
-  test("HR does NOT have wildcard '*'", !hrRole?.permissions?.includes("*"));
-
-  // Check RolePermission junction documents
+  // Check RolePermission junction documents (Single Source of Truth)
   const hrRolePerms = await RolePermission.find({ roleId: hrRole._id }).populate("permissionId");
   const hrRolePermCodes = hrRolePerms.map((rp) => rp.permissionId?.permissionCode).filter(Boolean);
-  const hrJunctionComplete = requiredHrPerms.every((p) => hrRolePermCodes.includes(p));
-  test("HR has authoritative RolePermission junction mappings", hrJunctionComplete);
-  test("HR RolePermission junction excludes user.manage_roles", !hrRolePermCodes.includes("user.manage_roles"));
+  const hrHasAllPerms = requiredHrPerms.every((p) => hrRolePermCodes.includes(p));
+  test("HR has all required standard permissions in RolePermission", hrHasAllPerms);
+
+  test("HR does NOT have user.manage_roles", !hrRolePermCodes.includes("user.manage_roles"));
+  test("HR does NOT have wildcard '*'", !hrRolePermCodes.includes("*"));
 
   // Check RoleMenu junction documents
   const hrRoleMenus = await RoleMenu.find({ roleId: hrRole._id }).populate("menuId");
@@ -769,8 +766,8 @@ async function runOnboardingAndProvisioningSuite() {
       headers: { Authorization: `Bearer ${ownerToken}` },
     });
     test(
-      "Owner retains all system menus and full permissions (*)",
-      ownerMe.data.data.permissions.includes("*") && ownerMe.data.data.menus.length >= 9
+      "Owner retains all system menus and full permissions",
+      ownerMe.data.data.permissions.length >= 30 && ownerMe.data.data.menus.length >= 9
     );
   } catch (err) {
     test("Owner regression test", false, err.response?.data?.message || err.message);

@@ -6,7 +6,6 @@ import {
   login,
   logout,
   profile,
-  Register,
   registerOwner,
   updateUser,
   updateUserRole,
@@ -26,7 +25,6 @@ const router = express.Router();
 // ── Public Routes ──
 router.post("/register-owner", registerOwner);
 router.post("/login", login);
-router.post("/v2/reg", Register);
 
 // ── Authenticated Self / Session Routes ──
 router.post("/logout", Authentication, logout);
