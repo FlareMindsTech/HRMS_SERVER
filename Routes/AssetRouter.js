@@ -5,15 +5,15 @@ import {
   returnAsset,
   getAssets,
 } from "../Controller/AssetController.js";
-import { Authendication } from "../Middleware/Auth.js";
+import { Authentication, requirePermission } from "../Middleware/Auth.js";
 
 const router = express.Router();
 
-router.use(Authendication);
+router.use(Authentication);
 
-router.post("/create", createAsset);
-router.post("/assign", assignAsset);
-router.put("/:assetId/return", returnAsset);
-router.get("/all", getAssets);
+router.post("/create", requirePermission("asset.create"), createAsset);
+router.post("/assign", requirePermission("asset.assign"), assignAsset);
+router.put("/:assetId/return", requirePermission("asset.return"), returnAsset);
+router.get("/all", requirePermission("asset.read"), getAssets);
 
 export default router;

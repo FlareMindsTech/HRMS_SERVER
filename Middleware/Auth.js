@@ -58,7 +58,7 @@ export const Authentication = async (req, res, next) => {
       .select("_id employeeCode role isActive isBlocked")
       .populate({
         path: "role",
-        select: "_id roleName roleCode priority permissions isActive isBlock isBlocked isSystemRole",
+        select: "_id roleName roleCode priority isActive isBlock isBlocked isSystemRole",
       })
       .lean();
 
@@ -107,7 +107,7 @@ export const Authentication = async (req, res, next) => {
       });
     }
 
-    // 7. Retrieve Granular Permissions from RolePermission collection
+    // 7. Retrieve Granular Permissions from RolePermission collection (Single Source of Truth)
     const rolePermissionDocs = await RolePermission.find({ roleId: user.role._id })
       .populate({
         path: "permissionId",
@@ -118,11 +118,6 @@ export const Authentication = async (req, res, next) => {
     const activePermissionsFromDB = rolePermissionDocs
       .filter((rp) => rp.permissionId && rp.permissionId.isActive)
       .map((rp) => rp.permissionId.permissionCode);
-
-    // Merge with role.permissions array for seamless backward compatibility
-    const mergedPermissions = Array.from(
-      new Set([...(user.role.permissions || []), ...activePermissionsFromDB])
-    );
 
     // 8. Retrieve Assigned Menus from RoleMenu collection
     const roleMenuDocs = await RoleMenu.find({ roleId: user.role._id })
@@ -155,7 +150,7 @@ export const Authentication = async (req, res, next) => {
       roleCode: user.role.roleCode,
       priority: user.role.priority,
       isSystemRole: user.role.isSystemRole || false,
-      permissions: mergedPermissions,
+      permissions: activePermissionsFromDB,
       menus: activeMenusFromDB,
     };
 
