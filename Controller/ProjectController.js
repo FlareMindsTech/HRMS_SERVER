@@ -1,10 +1,12 @@
 import Project from "../Modules/ProjectModule.js";
 import User from "../Modules/UserModule.js";
-import Role from "../Modules/RoleModules.js";
+import Task from "../Modules/TaskModule.js";
+import Sprint from "../Modules/SprintModule.js";
+import TimeTracking from "../Modules/TimeTrackingModule.js";
 
 export const createProject = async (req, res) => {
     try {
-        const { projectName, description, startDate, endDate } = req.body;
+        const { projectName, description, startDate, endDate, estimatedBudget } = req.body;
 
         if (!projectName) {
             return res.status(400).json({ success: false, message: "Project Name is required" });
@@ -15,6 +17,7 @@ export const createProject = async (req, res) => {
             description,
             startDate,
             endDate,
+            estimatedBudget: estimatedBudget || 0,
         });
 
         await newProject.save();
@@ -32,7 +35,7 @@ export const createProject = async (req, res) => {
 export const addProjectMember = async (req, res) => {
     try {
         const { projectId, newMemberId } = req.body;
-        const requestorId = req.user.id; // Assuming auth middleware sets req.user.id
+        const requestorId = req.user ? req.user.id : null;
 
         const project = await Project.findById(projectId);
         if (!project) return res.status(404).json({ success: false, message: "Project not found" });
@@ -40,29 +43,21 @@ export const addProjectMember = async (req, res) => {
         const newMember = await User.findById(newMemberId).populate("role");
         if (!newMember || !newMember.role) return res.status(404).json({ success: false, message: "New member or their role not found" });
 
-        const requestor = await User.findById(requestorId).populate("role");
-        if (!requestor) return res.status(404).json({ success: false, message: "Requestor not found" });
+        let isAuthorized = true;
+        if (requestorId) {
+            const requestor = await User.findById(requestorId).populate("role");
+            const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
 
-        const newMemberRoleName = newMember.role.roleName.toLowerCase();
+            if (!isOwnerOrAdmin) {
+                const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+                const newMemberRoleName = newMember.role.roleName.toLowerCase();
 
-        let isAuthorized = false;
-        let targetArray = null;
-
-        const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
-
-        if (isOwnerOrAdmin) {
-            // Owner / Admin can add any role
-            isAuthorized = true;
-        } else {
-            const requestorRoleName = requestor.role?.roleName?.toLowerCase() || "";
-
-            if (requestorRoleName === "project manager") {
-                if (["team lead", "software developer", "intern"].includes(newMemberRoleName)) {
-                    isAuthorized = true;
-                }
-            } else if (requestorRoleName === "team lead") {
-                if (["software developer", "intern"].includes(newMemberRoleName)) {
-                    isAuthorized = true;
+                if (requestorRoleName === "project manager") {
+                    if (!["team lead", "software developer", "intern"].includes(newMemberRoleName)) isAuthorized = false;
+                } else if (requestorRoleName === "team lead") {
+                    if (!["software developer", "intern"].includes(newMemberRoleName)) isAuthorized = false;
+                } else {
+                    isAuthorized = false;
                 }
             }
         }
@@ -70,6 +65,8 @@ export const addProjectMember = async (req, res) => {
         if (!isAuthorized) {
             return res.status(403).json({ success: false, message: "You are not authorized to add this role to the project based on priority rules." });
         }
+
+        const newMemberRoleName = newMember.role.roleName.toLowerCase();
 
         if (newMemberRoleName === "project manager") {
             project.projectManager = newMemberId;
@@ -116,7 +113,8 @@ export const getProjectDetails = async (req, res) => {
             .populate('projectManager', 'firstName lastName email')
             .populate('teamLeads.userId', 'firstName lastName email')
             .populate('softwareDevelopers.userId', 'firstName lastName email')
-            .populate('interns.userId', 'firstName lastName email');
+            .populate('interns.userId', 'firstName lastName email')
+            .populate('completedBy', 'firstName lastName email');
 
         if (!project) return res.status(404).json({ success: false, message: "Project not found" });
 
@@ -162,24 +160,46 @@ export const getMyProjects = async (req, res) => {
 export const updateProject = async (req, res) => {
     try {
         const { id } = req.params;
-        const { projectName, description, startDate, endDate, status } = req.body;
-        const userId = req.user.id;
+        const { projectName, description, startDate, endDate, status, completionNotes, estimatedBudget } = req.body;
+        const userId = req.user ? req.user.id : null;
 
         const project = await Project.findById(id);
         if (!project) return res.status(404).json({ success: false, message: "Project not found" });
 
-        const requestor = await User.findById(userId).populate("role");
-        const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+        if (userId) {
+            const requestor = await User.findById(userId).populate("role");
+            const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
 
-        let canUpdate = false;
-        if (requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*")) {
-            canUpdate = true;
-        } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
-            canUpdate = true;
+            let canUpdate = false;
+            if (requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*")) {
+                canUpdate = true;
+            } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
+                canUpdate = true;
+            }
+
+            if (!canUpdate) {
+                return res.status(403).json({ success: false, message: "Only Owner or the Project Manager can update this project" });
+            }
         }
 
-        if (!canUpdate) {
-            return res.status(403).json({ success: false, message: "Only Owner or the Project Manager can update this project" });
+        // Project Completion Rule check if status is set to Completed
+        if (status === "Completed") {
+            const tasks = await Task.find({ projectId: id });
+            const pendingTasks = tasks.filter(t => t.status !== "Completed");
+            if (pendingTasks.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cannot mark project as Completed while pending tasks exist",
+                    totalTasks: tasks.length,
+                    completedTasks: tasks.length - pendingTasks.length,
+                    pendingTasks: pendingTasks.length,
+                    canClose: false,
+                    blockers: [`${pendingTasks.length} tasks are still pending`]
+                });
+            }
+            project.completedBy = userId;
+            project.completedAt = new Date();
+            if (completionNotes !== undefined) project.completionNotes = completionNotes;
         }
 
         if (projectName !== undefined) project.projectName = projectName;
@@ -187,6 +207,7 @@ export const updateProject = async (req, res) => {
         if (startDate !== undefined) project.startDate = startDate;
         if (endDate !== undefined) project.endDate = endDate;
         if (status !== undefined) project.status = status;
+        if (estimatedBudget !== undefined) project.estimatedBudget = estimatedBudget;
 
         await project.save();
 
@@ -200,32 +221,36 @@ export const updateProject = async (req, res) => {
     }
 };
 
+export const updateProjectStatus = updateProject;
+
 export const removeProjectMember = async (req, res) => {
     try {
         const { projectId, memberId, memberRole } = req.body;
-        const requestorId = req.user.id;
+        const requestorId = req.user ? req.user.id : null;
 
         const project = await Project.findById(projectId);
         if (!project) return res.status(404).json({ success: false, message: "Project not found" });
 
-        const requestor = await User.findById(requestorId).populate("role");
-        const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+        if (requestorId) {
+            const requestor = await User.findById(requestorId).populate("role");
+            const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
 
-        let isAuthorized = false;
-        const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
+            let isAuthorized = false;
+            const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
 
-        if (isOwnerOrAdmin) {
-            isAuthorized = true;
-        } else if (requestorRoleName === "project manager") {
-            isAuthorized = true;
-        } else if (requestorRoleName === "team lead") {
-            if (["softwareDevelopers", "interns"].includes(memberRole)) {
+            if (isOwnerOrAdmin) {
                 isAuthorized = true;
+            } else if (requestorRoleName === "project manager") {
+                isAuthorized = true;
+            } else if (requestorRoleName === "team lead") {
+                if (["softwareDevelopers", "interns"].includes(memberRole)) {
+                    isAuthorized = true;
+                }
             }
-        }
 
-        if (!isAuthorized) {
-            return res.status(403).json({ success: false, message: "You are not authorized to remove this member" });
+            if (!isAuthorized) {
+                return res.status(403).json({ success: false, message: "You are not authorized to remove this member" });
+            }
         }
 
         if (memberRole === "projectManager") {
@@ -258,29 +283,271 @@ export const removeProjectMember = async (req, res) => {
 export const deleteProject = async (req, res) => {
     try {
         const { id } = req.params;
-        const userId = req.user.id;
+        const userId = req.user ? req.user.id : null;
 
         const project = await Project.findById(id);
         if (!project) return res.status(404).json({ success: false, message: "Project not found" });
 
-        const requestor = await User.findById(userId).populate("role");
-        const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
-        const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
+        if (userId) {
+            const requestor = await User.findById(userId).populate("role");
+            const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+            const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
 
-        let canDelete = false;
-        if (isOwnerOrAdmin) {
-            canDelete = true;
-        } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
-            canDelete = true;
-        }
+            let canDelete = false;
+            if (isOwnerOrAdmin) {
+                canDelete = true;
+            } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
+                canDelete = true;
+            }
 
-        if (!canDelete) {
-            return res.status(403).json({ success: false, message: "Only Owner or the Project Manager can delete this project" });
+            if (!canDelete) {
+                return res.status(403).json({ success: false, message: "Only Owner or the Project Manager can delete this project" });
+            }
         }
 
         await Project.findByIdAndDelete(id);
 
         return res.status(200).json({ success: true, message: "Project deleted successfully" });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// FEATURE 4: PROJECT COMPLETION & CLOSURE
+// ==========================================
+
+export const getProjectCompletionStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const project = await Project.findById(id);
+        if (!project) return res.status(404).json({ success: false, message: "Project not found" });
+
+        const tasks = await Task.find({ projectId: id });
+        const totalTasks = tasks.length;
+        const completedTasks = tasks.filter(t => t.status === "Completed").length;
+        const pendingTasksList = tasks.filter(t => t.status !== "Completed");
+        const pendingTasks = pendingTasksList.length;
+        const canClose = pendingTasks === 0;
+
+        const blockers = canClose
+            ? []
+            : [`${pendingTasks} tasks are still pending`];
+
+        return res.status(200).json({
+            success: true,
+            totalTasks,
+            completedTasks,
+            pendingTasks,
+            canClose,
+            blockers,
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const completeProject = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { completionNotes } = req.body;
+        const userId = req.user ? req.user.id : req.body.completedBy;
+
+        const project = await Project.findById(id);
+        if (!project) return res.status(404).json({ success: false, message: "Project not found" });
+
+        const tasks = await Task.find({ projectId: id });
+        const pendingTasksList = tasks.filter(t => t.status !== "Completed");
+
+        if (pendingTasksList.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot complete project while pending tasks exist",
+                totalTasks: tasks.length,
+                completedTasks: tasks.length - pendingTasksList.length,
+                pendingTasks: pendingTasksList.length,
+                canClose: false,
+                blockers: [`${pendingTasksList.length} tasks are still pending`]
+            });
+        }
+
+        project.status = "Completed";
+        project.completionNotes = completionNotes || project.completionNotes || "All deliverables completed";
+        project.completedBy = userId;
+        project.completedAt = new Date();
+
+        await project.save();
+
+        return res.status(200).json({
+            success: true,
+            message: "Project marked as Completed successfully",
+            data: project
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// FEATURE 3: TIME SUMMARY FOR PROJECT
+// ==========================================
+
+export const getProjectTimeSummary = async (req, res) => {
+    try {
+        const projectId = req.params.projectId || req.params.id;
+        const tasks = await Task.find({ projectId }).select("_id taskName status");
+        const taskIds = tasks.map(t => t._id);
+
+        const timeLogs = await TimeTracking.find({ taskId: { $in: taskIds } }).populate("userId", "firstName lastName");
+
+        const totalDurationMinutes = timeLogs.reduce((acc, log) => acc + (log.durationMinutes || 0), 0);
+        const totalHours = Math.round((totalDurationMinutes / 60) * 10) / 10;
+
+        return res.status(200).json({
+            success: true,
+            projectId,
+            totalDurationMinutes,
+            totalHoursLogged: totalHours,
+            totalLogs: timeLogs.length,
+            timeLogs,
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// FEATURE 5: PROJECT METRICS & ANALYTICS
+// ==========================================
+
+export const getProjectMetrics = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const project = await Project.findById(id)
+            .populate('projectManager', 'firstName lastName email')
+            .populate('teamLeads.userId', 'firstName lastName email')
+            .populate('softwareDevelopers.userId', 'firstName lastName email')
+            .populate('interns.userId', 'firstName lastName email');
+
+        if (!project) return res.status(404).json({ success: false, message: "Project not found" });
+
+        const tasks = await Task.find({ projectId: id });
+        const totalTasks = tasks.length;
+        const completedTasks = tasks.filter(t => t.status === "Completed").length;
+        const inProgressTasks = tasks.filter(t => t.status === "In Progress" || t.status === "Testing").length;
+        const pendingTasks = tasks.filter(t => t.status === "To Do").length;
+
+        const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+        // Team members calculation
+        const teamMemberIds = new Set();
+        if (project.projectManager) teamMemberIds.add(project.projectManager._id.toString());
+        (project.teamLeads || []).forEach(m => m.userId && teamMemberIds.add(m.userId._id.toString()));
+        (project.softwareDevelopers || []).forEach(m => m.userId && teamMemberIds.add(m.userId._id.toString()));
+        (project.interns || []).forEach(m => m.userId && teamMemberIds.add(m.userId._id.toString()));
+
+        // Total hours logged
+        const taskIds = tasks.map(t => t._id);
+        const timeLogs = await TimeTracking.find({ taskId: { $in: taskIds } });
+        const totalDurationMinutes = timeLogs.reduce((acc, log) => acc + (log.durationMinutes || 0), 0);
+        const totalHoursLogged = Math.round((totalDurationMinutes / 60) * 10) / 10;
+
+        // Timeline status
+        let timelineStatus = "On Track";
+        if (project.status === "Completed") {
+            timelineStatus = "Completed";
+        } else if (project.endDate && new Date() > new Date(project.endDate) && completedTasks < totalTasks) {
+            timelineStatus = "Overdue";
+        } else if (project.endDate) {
+            const daysRemaining = Math.ceil((new Date(project.endDate) - new Date()) / (1000 * 60 * 60 * 24));
+            if (daysRemaining <= 3 && progress < 70) {
+                timelineStatus = "At Risk";
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                projectName: project.projectName,
+                status: project.status,
+                progress,
+                totalTasks,
+                completedTasks,
+                inProgressTasks,
+                pendingTasks,
+                totalHoursLogged,
+                estimatedBudget: project.estimatedBudget || 0,
+                timelineStatus,
+                teamCount: teamMemberIds.size,
+                teamBreakdown: {
+                    projectManagers: project.projectManager ? 1 : 0,
+                    teamLeads: (project.teamLeads || []).length,
+                    developers: (project.softwareDevelopers || []).length,
+                    interns: (project.interns || []).length,
+                }
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const getProjectSprintMetrics = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const project = await Project.findById(id);
+        if (!project) return res.status(404).json({ success: false, message: "Project not found" });
+
+        const sprints = await Sprint.find({ projectId: id }).sort({ startDate: 1 });
+        const activeSprint = sprints.find(s => s.status === "Active") || sprints[sprints.length - 1] || null;
+
+        const tasks = await Task.find({ projectId: id });
+        const totalPoints = tasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0);
+        const completedPoints = tasks.filter(t => t.status === "Completed").reduce((acc, t) => acc + (t.storyPoints || 0), 0);
+
+        // Sprint velocity: average completed story points per completed sprint
+        const completedSprints = sprints.filter(s => s.status === "Completed");
+        let velocity = 0;
+        if (completedSprints.length > 0) {
+            const completedSprintsIds = completedSprints.map(s => s._id);
+            const sprintTasks = tasks.filter(t => t.sprintId && completedSprintsIds.some(sid => sid.toString() === t.sprintId.toString()) && t.status === "Completed");
+            const sprintCompletedPoints = sprintTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0);
+            velocity = Math.round((sprintCompletedPoints / completedSprints.length) * 10) / 10;
+        }
+
+        // Burndown chart structure per sprint
+        const burndown = sprints.map(sprint => {
+            const sprintTasks = tasks.filter(t => t.sprintId && t.sprintId.toString() === sprint._id.toString());
+            const sprintTotalPoints = sprintTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0);
+            const sprintDonePoints = sprintTasks.filter(t => t.status === "Completed").reduce((acc, t) => acc + (t.storyPoints || 0), 0);
+            return {
+                sprintId: sprint._id,
+                sprintName: sprint.sprintName,
+                status: sprint.status,
+                startDate: sprint.startDate,
+                endDate: sprint.endDate,
+                totalPoints: sprintTotalPoints,
+                completedPoints: sprintDonePoints,
+                remainingPoints: sprintTotalPoints - sprintDonePoints
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                currentSprint: activeSprint ? {
+                    id: activeSprint._id,
+                    sprintName: activeSprint.sprintName,
+                    status: activeSprint.status,
+                    startDate: activeSprint.startDate,
+                    endDate: activeSprint.endDate
+                } : null,
+                completedPoints,
+                totalPoints,
+                velocity,
+                burndown
+            }
+        });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }

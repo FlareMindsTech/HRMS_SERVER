@@ -8,8 +8,33 @@ export const createTask = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const { projectId, sprintId, taskName, description, assignedTo, priority, dueDate } = req.body;
-        const assignedBy = req.user.id;
+        const {
+            projectId,
+            sprintId,
+            taskName,
+            description,
+            assignedTo,
+            priority,
+            dueDate,
+            remarks,
+            attachments,
+            storyPoints,
+            estimatedHours
+        } = req.body;
+        const assignedBy = req.user ? req.user.id : req.body.assignedBy;
+
+        if (!projectId || !taskName) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, message: "projectId and taskName are required" });
+        }
+
+        const projectExists = await Project.findById(projectId);
+        if (!projectExists) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(404).json({ success: false, message: "Project not found" });
+        }
 
         const newTask = new Task({
             projectId,
@@ -18,20 +43,28 @@ export const createTask = async (req, res) => {
             description,
             assignedTo,
             assignedBy,
-            priority,
+            priority: priority || "Medium",
             dueDate,
+            remarks,
+            attachments,
+            storyPoints: storyPoints || 0,
+            estimatedHours: estimatedHours || 0,
         });
 
         await newTask.save({ session });
 
         if (assignedTo) {
-            const notification = new Notification({
-                userId: assignedTo,
-                message: `You have been assigned a new task: ${taskName}`,
-                type: 'Task Assignment',
-                relatedEntityId: newTask._id
-            });
-            await notification.save({ session });
+            try {
+                const notification = new Notification({
+                    userId: assignedTo,
+                    message: `You have been assigned a new task: ${taskName}`,
+                    type: 'Task Assignment',
+                    relatedEntityId: newTask._id
+                });
+                await notification.save({ session });
+            } catch (notifErr) {
+                console.error("Task assignment notification failed:", notifErr);
+            }
         }
 
         await session.commitTransaction();
@@ -51,8 +84,26 @@ export const createTask = async (req, res) => {
 
 export const getTasksByProject = async (req, res) => {
     try {
-        const { projectId } = req.params;
-        const tasks = await Task.find({ projectId }).populate("assignedTo", "firstName lastName");
+        const projectId = req.params.projectId || req.params.id;
+        const tasks = await Task.find({ projectId })
+            .populate("assignedTo", "firstName lastName email")
+            .populate("assignedBy", "firstName lastName email")
+            .populate("sprintId", "sprintName status")
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({ success: true, data: tasks });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const getTasksBySprint = async (req, res) => {
+    try {
+        const sprintId = req.params.sprintId || req.params.id;
+        const tasks = await Task.find({ sprintId })
+            .populate("assignedTo", "firstName lastName email")
+            .populate("assignedBy", "firstName lastName email")
+            .sort({ createdAt: -1 });
 
         return res.status(200).json({ success: true, data: tasks });
     } catch (error) {
@@ -64,37 +115,110 @@ export const updateTaskStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const { status } = req.body;
-        const userId = req.user.id;
+        const userId = req.user ? req.user.id : null;
+
+        const validStatuses = ["To Do", "In Progress", "Testing", "Completed"];
+        if (!status || !validStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid status. Status flow: ${validStatuses.join(" -> ")}`
+            });
+        }
 
         const task = await Task.findById(id).populate("projectId");
         if (!task) return res.status(404).json({ success: false, message: "Task not found" });
 
-        // Secure task update rules:
-        // Only Assingee, Owner, Project Manager (of that project), or TL can update the task
-        const isAssignee = task.assignedTo && task.assignedTo.toString() === userId;
-        const isOwner = req.user.isOwner;
+        if (userId) {
+            const isAssignee = task.assignedTo && task.assignedTo.toString() === userId;
+            const isOwner = req.user.priority <= 2 || req.user.isOwner;
 
-        let isManagerOrTL = false;
-        if (task.projectId) {
-            const project = await Project.findById(task.projectId._id); // task.projectId is populated, but _id works
-            if (project) {
-                if (project.projectManager && project.projectManager.toString() === userId) {
-                    isManagerOrTL = true;
+            let isManagerOrTL = false;
+            if (task.projectId) {
+                const project = await Project.findById(task.projectId._id || task.projectId);
+                if (project) {
+                    if (project.projectManager && project.projectManager.toString() === userId) {
+                        isManagerOrTL = true;
+                    }
+                    if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
+                        isManagerOrTL = true;
+                    }
                 }
-                if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
-                    isManagerOrTL = true;
-                }
+            }
+
+            if (!isAssignee && !isOwner && !isManagerOrTL) {
+                return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to update this task" });
             }
         }
 
-        if (!isAssignee && !isOwner && !isManagerOrTL) {
-            return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to update this task" });
+        // Status transition validation — linear flow, Testing can bounce back to In Progress
+        const validTransitions = {
+            "To Do": ["In Progress"],
+            "In Progress": ["Testing", "To Do"],
+            "Testing": ["Completed", "In Progress"],
+            "Completed": []
+        };
+
+        const isOwnerBypass = req.user && (req.user.priority <= 2 || req.user.isOwner);
+        if (!isOwnerBypass && status !== task.status) {
+            const allowedNext = validTransitions[task.status] || [];
+            if (!allowedNext.includes(status)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot transition from "${task.status}" to "${status}"`,
+                    allowedNext
+                });
+            }
         }
 
         task.status = status;
         await task.save();
 
         return res.status(200).json({ success: true, message: "Task status updated successfully", data: task });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+export const reassignTask = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { assignedTo } = req.body;
+
+        if (!assignedTo) {
+            return res.status(400).json({ success: false, message: "assignedTo user ID is required" });
+        }
+
+        const targetUser = await User.findById(assignedTo);
+        if (!targetUser) {
+            return res.status(404).json({ success: false, message: "Assigned user not found" });
+        }
+
+        const task = await Task.findById(id);
+        if (!task) return res.status(404).json({ success: false, message: "Task not found" });
+
+        task.assignedTo = assignedTo;
+        if (req.user) {
+            task.assignedBy = req.user.id;
+        }
+        await task.save();
+
+        // Trigger notification if supported
+        try {
+            const notification = new Notification({
+                userId: assignedTo,
+                message: `You have been reassigned to task: ${task.taskName}`,
+                type: 'Task Assignment',
+                relatedEntityId: task._id
+            });
+            await notification.save();
+        } catch (notifErr) {
+            console.error("Reassignment notification failed:", notifErr);
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Task reassigned successfully",
+            data: task,
+        });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
@@ -111,6 +235,7 @@ export const getMyTasks = async (req, res) => {
         const tasks = await Task.find(filter)
             .populate("projectId", "projectName")
             .populate("assignedBy", "firstName lastName")
+            .populate("sprintId", "sprintName status")
             .sort({ dueDate: 1 });
 
         return res.status(200).json({ success: true, data: tasks });
@@ -140,30 +265,43 @@ export const getTaskById = async (req, res) => {
 export const updateTask = async (req, res) => {
     try {
         const { id } = req.params;
-        const { taskName, description, assignedTo, priority, dueDate, sprintId } = req.body;
-        const userId = req.user.id;
+        const {
+            taskName,
+            description,
+            assignedTo,
+            priority,
+            dueDate,
+            sprintId,
+            remarks,
+            attachments,
+            storyPoints,
+            estimatedHours,
+            status
+        } = req.body;
+        const userId = req.user ? req.user.id : null;
 
         const task = await Task.findById(id).populate("projectId");
         if (!task) return res.status(404).json({ success: false, message: "Task not found" });
 
-        // Secure task update rules: Only Owner, Project Manager (of that project), or TL can edit task details
-        const isOwner = req.user.isOwner;
+        if (userId) {
+            const isOwner = req.user.priority <= 2 || req.user.isOwner;
 
-        let isManagerOrTL = false;
-        if (task.projectId) {
-            const project = await Project.findById(task.projectId._id);
-            if (project) {
-                if (project.projectManager && project.projectManager.toString() === userId) {
-                    isManagerOrTL = true;
-                }
-                if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
-                    isManagerOrTL = true;
+            let isManagerOrTL = false;
+            if (task.projectId) {
+                const project = await Project.findById(task.projectId._id || task.projectId);
+                if (project) {
+                    if (project.projectManager && project.projectManager.toString() === userId) {
+                        isManagerOrTL = true;
+                    }
+                    if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
+                        isManagerOrTL = true;
+                    }
                 }
             }
-        }
 
-        if (!isOwner && !isManagerOrTL) {
-            return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to update this task" });
+            if (!isOwner && !isManagerOrTL && task.assignedTo?.toString() !== userId) {
+                return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to update this task" });
+            }
         }
 
         if (taskName !== undefined) task.taskName = taskName;
@@ -172,6 +310,11 @@ export const updateTask = async (req, res) => {
         if (priority !== undefined) task.priority = priority;
         if (dueDate !== undefined) task.dueDate = dueDate;
         if (sprintId !== undefined) task.sprintId = sprintId;
+        if (remarks !== undefined) task.remarks = remarks;
+        if (attachments !== undefined) task.attachments = attachments;
+        if (storyPoints !== undefined) task.storyPoints = storyPoints;
+        if (estimatedHours !== undefined) task.estimatedHours = estimatedHours;
+        if (status !== undefined) task.status = status;
 
         await task.save();
 
@@ -184,29 +327,30 @@ export const updateTask = async (req, res) => {
 export const deleteTask = async (req, res) => {
     try {
         const { id } = req.params;
-        const userId = req.user.id;
+        const userId = req.user ? req.user.id : null;
 
         const task = await Task.findById(id).populate("projectId");
         if (!task) return res.status(404).json({ success: false, message: "Task not found" });
 
-        // Secure delete rules: Only Owner, Project Manager (of that project), or TL can delete task
-        const isOwner = req.user.isOwner;
+        if (userId) {
+            const isOwner = req.user.priority <= 2 || req.user.isOwner;
 
-        let isManagerOrTL = false;
-        if (task.projectId) {
-            const project = await Project.findById(task.projectId._id);
-            if (project) {
-                if (project.projectManager && project.projectManager.toString() === userId) {
-                    isManagerOrTL = true;
-                }
-                if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
-                    isManagerOrTL = true;
+            let isManagerOrTL = false;
+            if (task.projectId) {
+                const project = await Project.findById(task.projectId._id || task.projectId);
+                if (project) {
+                    if (project.projectManager && project.projectManager.toString() === userId) {
+                        isManagerOrTL = true;
+                    }
+                    if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
+                        isManagerOrTL = true;
+                    }
                 }
             }
-        }
 
-        if (!isOwner && !isManagerOrTL) {
-            return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to delete this task" });
+            if (!isOwner && !isManagerOrTL) {
+                return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to delete this task" });
+            }
         }
 
         await Task.findByIdAndDelete(id);

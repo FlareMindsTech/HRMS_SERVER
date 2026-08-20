@@ -64,6 +64,20 @@ const projectSchema = new mongoose.Schema(
                 },
             },
         ],
+        completionNotes: {
+            type: String,
+        },
+        completedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+        },
+        completedAt: {
+            type: Date,
+        },
+        estimatedBudget: {
+            type: Number,
+            default: 0,
+        },
     },
     {
         timestamps: true,
