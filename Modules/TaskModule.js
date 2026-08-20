@@ -40,6 +40,24 @@ const taskSchema = new mongoose.Schema(
         dueDate: {
             type: Date,
         },
+        remarks: {
+            type: String,
+        },
+        attachments: [
+            {
+                fileName: String,
+                fileUrl: String,
+                uploadedAt: { type: Date, default: Date.now }
+            }
+        ],
+        storyPoints: {
+            type: Number,
+            default: 0,
+        },
+        estimatedHours: {
+            type: Number,
+            default: 0,
+        },
     },
     {
         timestamps: true,

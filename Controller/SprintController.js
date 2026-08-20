@@ -1,22 +1,38 @@
 import Sprint from "../Modules/SprintModule.js";
 import Project from "../Modules/ProjectModule.js";
+import Task from "../Modules/TaskModule.js";
+
+// Helper: PM / TeamLead / Admin-Owner check
+const canManageSprint = (req, project) => {
+    if (!req.user) return true; // no auth context, skip (shouldn't happen, route is protected)
+    const userId = req.user.id;
+    const isOwnerOrAdmin = req.user.priority <= 2;
+    const isProjectManager = project.projectManager && project.projectManager.toString() === userId;
+    const isTeamLead = project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId);
+    return isOwnerOrAdmin || isProjectManager || isTeamLead;
+};
 
 export const createSprint = async (req, res) => {
     try {
-        const { projectId, sprintName, startDate, endDate, status } = req.body;
+        const { projectId, sprintName, description, startDate, endDate, status } = req.body;
 
-        // Sprint validation: check if project exists
+        if (!projectId || !sprintName || !startDate || !endDate) {
+            return res.status(400).json({ success: false, message: "projectId, sprintName, startDate, and endDate are required" });
+        }
+
         const project = await Project.findById(projectId);
         if (!project) {
             return res.status(404).json({ success: false, message: "Project not found" });
         }
 
-        // Sprint validation: ensure startDate is before endDate
+        if (!canManageSprint(req, project)) {
+            return res.status(403).json({ success: false, message: "Only Project Manager, Team Lead, or Admin can create sprints" });
+        }
+
         if (new Date(startDate) >= new Date(endDate)) {
             return res.status(400).json({ success: false, message: "Start date must be before end date" });
         }
 
-        // Sprint validation: Check overlap
         const overlappingSprint = await Sprint.findOne({
             projectId,
             $or: [
@@ -31,6 +47,7 @@ export const createSprint = async (req, res) => {
         const newSprint = new Sprint({
             projectId,
             sprintName,
+            description,
             startDate,
             endDate,
             status: status || "Planned",
@@ -44,11 +61,78 @@ export const createSprint = async (req, res) => {
     }
 };
 
+export const updateSprintStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        const validStatuses = ["Planned", "Active", "Completed"];
+        if (!status || !validStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`
+            });
+        }
+
+        const sprint = await Sprint.findById(id);
+        if (!sprint) {
+            return res.status(404).json({ success: false, message: "Sprint not found" });
+        }
+
+        const project = await Project.findById(sprint.projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, message: "Project not found" });
+        }
+
+        if (!canManageSprint(req, project)) {
+            return res.status(403).json({ success: false, message: "Only Project Manager, Team Lead, or Admin can update sprint status" });
+        }
+
+        if (status === "Completed") {
+            const pendingTasks = await Task.countDocuments({
+                sprintId: id,
+                status: { $ne: "Completed" }
+            });
+            if (pendingTasks > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot complete sprint — ${pendingTasks} task(s) still pending`
+                });
+            }
+        }
+
+        sprint.status = status;
+        await sprint.save();
+
+        return res.status(200).json({
+            success: true,
+            message: "Sprint status updated successfully",
+            data: sprint,
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 export const getProjectSprints = async (req, res) => {
     try {
-        const { projectId } = req.params;
+        const projectId = req.params.projectId || req.params.id;
         const sprints = await Sprint.find({ projectId }).sort({ startDate: 1 });
         return res.status(200).json({ success: true, data: sprints });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const getSprintTasks = async (req, res) => {
+    try {
+        const sprintId = req.params.sprintId || req.params.id;
+        const tasks = await Task.find({ sprintId })
+            .populate("assignedTo", "firstName lastName email")
+            .populate("assignedBy", "firstName lastName email")
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({ success: true, data: tasks });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
@@ -70,20 +154,27 @@ export const getSprintById = async (req, res) => {
 export const updateSprint = async (req, res) => {
     try {
         const { id } = req.params;
-        const { sprintName, startDate, endDate, status } = req.body;
+        const { sprintName, description, startDate, endDate, status } = req.body;
 
         const sprint = await Sprint.findById(id);
         if (!sprint) return res.status(404).json({ success: false, message: "Sprint not found" });
 
+        const project = await Project.findById(sprint.projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, message: "Project not found" });
+        }
+
+        if (!canManageSprint(req, project)) {
+            return res.status(403).json({ success: false, message: "Only Project Manager, Team Lead, or Admin can update this sprint" });
+        }
+
         const newStartDate = startDate !== undefined ? startDate : sprint.startDate;
         const newEndDate = endDate !== undefined ? endDate : sprint.endDate;
 
-        // Sprint validation: ensure startDate is before endDate
         if (new Date(newStartDate) >= new Date(newEndDate)) {
             return res.status(400).json({ success: false, message: "Start date must be before end date" });
         }
 
-        // Sprint validation: Check overlap (excluding this sprint itself)
         const overlappingSprint = await Sprint.findOne({
             _id: { $ne: id },
             projectId: sprint.projectId,
@@ -96,7 +187,21 @@ export const updateSprint = async (req, res) => {
             return res.status(400).json({ success: false, message: "Sprint dates overlap with an existing sprint in this project" });
         }
 
+        if (status === "Completed" && sprint.status !== "Completed") {
+            const pendingTasks = await Task.countDocuments({
+                sprintId: id,
+                status: { $ne: "Completed" }
+            });
+            if (pendingTasks > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot complete sprint — ${pendingTasks} task(s) still pending`
+                });
+            }
+        }
+
         if (sprintName !== undefined) sprint.sprintName = sprintName;
+        if (description !== undefined) sprint.description = description;
         if (startDate !== undefined) sprint.startDate = startDate;
         if (endDate !== undefined) sprint.endDate = endDate;
         if (status !== undefined) sprint.status = status;
@@ -119,6 +224,26 @@ export const deleteSprint = async (req, res) => {
 
         const sprint = await Sprint.findById(id);
         if (!sprint) return res.status(404).json({ success: false, message: "Sprint not found" });
+
+        const project = await Project.findById(sprint.projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, message: "Project not found" });
+        }
+
+        if (!canManageSprint(req, project)) {
+            return res.status(403).json({ success: false, message: "Only Project Manager, Team Lead, or Admin can delete this sprint" });
+        }
+
+        const pendingTasks = await Task.countDocuments({
+            sprintId: id,
+            status: { $ne: "Completed" }
+        });
+        if (pendingTasks > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete sprint — ${pendingTasks} task(s) still pending. Reassign or complete them first.`
+            });
+        }
 
         await Sprint.findByIdAndDelete(id);
 
