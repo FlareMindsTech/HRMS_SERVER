@@ -170,19 +170,22 @@ export const login = async (req, res) => {
 
     const {
       identifier,
+      email,
       password,
       latitude,
       longitude,
     } = req.body;
+
+    const loginIdentifier = identifier || email;
 
     // ==================================================
     // VALIDATE LOGIN INPUT
     // ==================================================
 
     if (
-      typeof identifier !== "string" ||
+      typeof loginIdentifier !== "string" ||
       typeof password !== "string" ||
-      !identifier.trim() ||
+      !loginIdentifier.trim() ||
       !password
     ) {
       return res.status(400).json({
@@ -192,7 +195,7 @@ export const login = async (req, res) => {
       });
     }
 
-    const value = identifier.trim();
+    const value = loginIdentifier.trim();
 
     // ==================================================
     // FIND USER
@@ -208,14 +211,10 @@ export const login = async (req, res) => {
         },
       ],
     })
-      .select(
-        "+password " +
-        "_id firstName lastName email mobileNo " +
-        "employeeCode role tlCode isActive isBlocked wfh hasLoginAccess"
-      )
+      .select("+password")
       .lean();
 
-    if (!user) {
+    if (!user || !user.password || typeof password !== "string") {
       return res.status(401).json({
         success: false,
         message: "Invalid credentials",
