@@ -346,6 +346,32 @@ export const seedRBACFoundation = async () => {
       });
     }
 
+    let projectManagerRole = await Role.findOne({
+      $or: [{ roleCode: "PROJECT_MANAGER" }, { roleName: /^Project Manager/i }],
+    });
+    if (!projectManagerRole) {
+      projectManagerRole = await Role.create({
+        roleName: "Project Manager",
+        roleCode: "PROJECT_MANAGER",
+        priority: 3,
+        isSystemRole: true,
+        isActive: true,
+        isBlock: false,
+        isBlocked: false,
+        description: "Protected standard Project Manager role with complete project management capabilities and standard employee self-service access",
+      });
+    } else {
+      projectManagerRole.roleName = "Project Manager";
+      projectManagerRole.roleCode = "PROJECT_MANAGER";
+      projectManagerRole.priority = 3;
+      projectManagerRole.isSystemRole = true;
+      projectManagerRole.isActive = true;
+      projectManagerRole.isBlock = false;
+      projectManagerRole.isBlocked = false;
+      projectManagerRole.description = "Protected standard Project Manager role with complete project management capabilities and standard employee self-service access";
+      await projectManagerRole.save();
+    }
+
     // HR Role Seeding / Migration to Protected Standard System Role
     const hrPermCodes = [
       "user.read",
@@ -460,6 +486,17 @@ export const seedRBACFoundation = async () => {
       }
     }
 
+    // Project Manager gets Attendance, Projects, Dashboard, Leave
+    if (projectManagerRole) {
+      for (const menu of employeeMenus) {
+        await RoleMenu.findOneAndUpdate(
+          { roleId: projectManagerRole._id, menuId: menu._id },
+          { $setOnInsert: { roleId: projectManagerRole._id, menuId: menu._id } },
+          { upsert: true }
+        );
+      }
+    }
+
     // 5. Map Permissions to Roles in RolePermission collection (Single Source of Truth)
     // Owner & Admin get all permissions
     for (const perm of seededPermissions) {
@@ -529,6 +566,36 @@ export const seedRBACFoundation = async () => {
         await RolePermission.findOneAndUpdate(
           { roleId: employeeRole._id, permissionId: perm._id },
           { $setOnInsert: { roleId: employeeRole._id, permissionId: perm._id } },
+          { upsert: true }
+        );
+      }
+    }
+
+    // Project Manager gets base employee permissions + ALL project permissions
+    const projectManagerPermCodes = [
+      "attendance.read.own",
+      "attendance.punch_in",
+      "attendance.punch_out",
+      "user.read_own",
+      "leave.read.own",
+      "leave.apply",
+      "leave.cancel",
+      "project.read",
+      "project.create",
+      "project.update",
+      "project.delete",
+      "project.add_member",
+      "project.remove_member",
+    ];
+    const projectManagerPermDocs = seededPermissions.filter((p) =>
+      projectManagerPermCodes.includes(p.permissionCode)
+    );
+
+    if (projectManagerRole) {
+      for (const perm of projectManagerPermDocs) {
+        await RolePermission.findOneAndUpdate(
+          { roleId: projectManagerRole._id, permissionId: perm._id },
+          { $setOnInsert: { roleId: projectManagerRole._id, permissionId: perm._id } },
           { upsert: true }
         );
       }

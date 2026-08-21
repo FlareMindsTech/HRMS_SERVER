@@ -56,7 +56,7 @@ export const createCustomRole = async (req, res) => {
           message: "Forbidden: Administrators can only create operational roles with Priority >= 3.",
         });
       }
-      if (["OWNER", "ADMIN", "HR", "EMPLOYEE"].includes(roleCode)) {
+      if (["OWNER", "ADMIN", "HR", "PROJECT_MANAGER", "EMPLOYEE"].includes(roleCode)) {
         return res.status(403).json({
           success: false,
           message: "Forbidden: Cannot create system or management role code.",
@@ -169,7 +169,7 @@ export const updateCustomRole = async (req, res) => {
           message: "Forbidden: Only System Owner can modify System Admin configuration.",
         });
       }
-      if (role.isSystemRole || ["OWNER", "ADMIN", "HR", "EMPLOYEE"].includes(role.roleCode)) {
+      if (role.isSystemRole || ["OWNER", "ADMIN", "HR", "PROJECT_MANAGER", "EMPLOYEE"].includes(role.roleCode)) {
         return res.status(403).json({
           success: false,
           message: "Forbidden: Core system roles can only be modified by System Owner.",
@@ -347,7 +347,7 @@ export const deleteRole = async (req, res) => {
       return res.status(404).json({ success: false, message: "Role not found" });
     }
 
-    if (role.isSystemRole || role.priority === 1 || ["OWNER", "ADMIN", "HR", "EMPLOYEE"].includes(role.roleCode)) {
+    if (role.isSystemRole || role.priority === 1 || ["OWNER", "ADMIN", "HR", "PROJECT_MANAGER", "EMPLOYEE"].includes(role.roleCode)) {
       return res.status(403).json({
         success: false,
         message: "Forbidden: Core system roles cannot be deleted.",
