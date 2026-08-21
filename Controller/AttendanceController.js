@@ -44,6 +44,14 @@ const getTodayString = () => {
     return new Date().toISOString().split("T")[0];
 };
 
+// Check if punch in time is late (e.g. after 09:15 AM local time)
+const checkIfLate = (loginDate) => {
+    const hours = loginDate.getHours();
+    const minutes = loginDate.getMinutes();
+    // Standard threshold: 09:15 AM (9 hours, 15 minutes)
+    return hours > 9 || (hours === 9 && minutes > 15);
+};
+
 // ======================================================
 // PUNCH IN
 // ======================================================
@@ -67,8 +75,8 @@ export const punchIn = async (req, res) => {
             });
         }
 
-        // 2. Fetch User to verify account and WFH permission
-        const user = await User.findById(userId).select("wfh isActive isBlocked").lean();
+        // 2. Fetch User to verify account status and WFH approval
+        const user = await User.findById(userId).select("wfh isActive isBlocked firstName lastName").lean();
         if (!user) {
             return res.status(404).json({
                 success: false,
@@ -84,7 +92,7 @@ export const punchIn = async (req, res) => {
         }
 
         // 3. Location / Geofencing / WFH Validation
-        const { latitude, longitude } = req.body;
+        const { latitude, longitude, accuracy } = req.body;
         const userLatitude = Number(latitude);
         const userLongitude = Number(longitude);
 
@@ -134,6 +142,8 @@ export const punchIn = async (req, res) => {
             });
         }
 
+        // Geofence distance check (debug logs removed for production)
+
         const isAtOffice = distance <= officeRadius;
         let locationType;
 
@@ -152,6 +162,8 @@ export const punchIn = async (req, res) => {
             }
         }
 
+        const isLate = checkIfLate(now);
+
         // 4. Create today's attendance record
         const attendance = await Attendance.create({
             userId,
@@ -161,8 +173,13 @@ export const punchIn = async (req, res) => {
             totalWorkingMinutes: 0,
             totalHours: 0,
             locationType,
-            status: "Present",
-            isLate: false,
+            status: "Working",
+            isLate,
+            punchInLocation: {
+                latitude: userLatitude,
+                longitude: userLongitude,
+                accuracy: Number(accuracy) || 0
+            }
         });
 
         return res.status(201).json({
@@ -221,17 +238,33 @@ export const punchOut = async (req, res) => {
             });
         }
 
-        // 3. Calculate total working minutes & status using locked policy
+        // 3. Optional location recording for punch out
+        const { latitude, longitude, accuracy } = req.body || {};
+        if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
+            attendance.punchOutLocation = {
+                latitude: Number(latitude),
+                longitude: Number(longitude),
+                accuracy: Number(accuracy) || 0
+            };
+        }
+
+        // 4. Calculate total working minutes & status using company policy
         const totalMinutes = calculateMinutes(attendance.loginTime, now);
         const totalHours = parseFloat((totalMinutes / 60).toFixed(2));
 
-        let status = "Absent";
+        // Status derivation:
+        // ≥510 min (8.5h) + not late → Present
+        // ≥510 min (8.5h) + late → Late
+        // ≥240 min (4h) → Half Day
+        // <240 min → Half Day (employee attempted work; "Absent" is only for no-show days)
+        let status;
         if (totalMinutes >= 510) {
-            status = "Present";
+            status = attendance.isLate ? "Late" : "Present";
         } else if (totalMinutes >= 240) {
             status = "Half Day";
         } else {
-            status = "Absent";
+            // Short session — still counts as a half day attempt rather than absent
+            status = "Half Day";
         }
 
         attendance.logoutTime = now;
@@ -280,116 +313,69 @@ export const getTodayAttendance = async (req, res) => {
     }
 };
 
-// HR/Admin manual attendance correction (Correction only, not creation)
-export const updateAttendanceCorrection = async (req, res) => {
+// ======================================================
+// GET OWN ATTENDANCE (Strictly derives userId from req.user.id)
+// ======================================================
+export const getMyAttendance = async (req, res) => {
     try {
-        const { id } = req.params;
-        const { loginTime, logoutTime, status, locationType, isLate } = req.body;
-
-        const attendance = await Attendance.findById(id);
-        if (!attendance) return res.status(404).json({ message: "Attendance record not found" });
-
-        if (loginTime) attendance.loginTime = loginTime;
-        if (logoutTime) {
-            attendance.logoutTime = logoutTime;
-            const totalMinutes = calculateMinutes(attendance.loginTime, logoutTime);
-            attendance.totalWorkingMinutes = totalMinutes;
-            attendance.totalHours = parseFloat((totalMinutes / 60).toFixed(2));
-
-            // Auto-calculate status based on company policy if not manually provided
-            if (!status) {
-                if (totalMinutes >= 510) { // 8.5 hours = 510 minutes
-                    attendance.status = 'Present';
-                } else if (totalMinutes >= 240) { // 4 hours = 240 minutes
-                    attendance.status = 'Half Day';
-                } else {
-                    attendance.status = 'Absent';
-                }
-            }
-        }
-
-        if (status) attendance.status = status;
-        if (locationType) attendance.locationType = locationType;
-        if (isLate !== undefined) attendance.isLate = isLate;
-
-        await attendance.save();
-        res.status(200).json({ message: "Attendance corrected successfully", data: attendance });
+        const userId = req.user.id;
+        const attendance = await Attendance.find({ userId }).sort({ date: -1 });
+        return res.status(200).json({
+            success: true,
+            data: attendance,
+        });
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: error.message,
+        });
     }
 };
 
-export const getAttendanceByUser = async (req, res) => {
-    try {
-        const attendance = await Attendance.find({ userId: req.params.userId }).sort({ date: -1 });
-        res.status(200).json({ data: attendance });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-};
-
+// ======================================================
+// GET ATTENDANCE BY MONTH
+// ======================================================
 export const getAttendanceByMonth = async (req, res) => {
     try {
-        const { userId, month, year } = req.params;
+        const { month, year } = req.params;
         const normalizedMonth = month.padStart(2, '0');
 
-        // Accurate month range logic
+        // IDOR defense: only allow viewing another user's data if requester has team/all permissions
+        let targetUserId = req.user.id;
+        if (req.query.userId && req.query.userId !== req.user.id) {
+            const permissions = req.user.permissions || [];
+            const canViewOthers = req.user.priority === 1 ||
+                permissions.includes('*') ||
+                permissions.includes('attendance.read.team') ||
+                permissions.includes('attendance.read.all');
+            if (!canViewOthers) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied. You do not have permission to view another employee\'s attendance.',
+                });
+            }
+            targetUserId = req.query.userId;
+        }
+
         const startDateString = `${year}-${normalizedMonth}-01`;
         const lastDay = new Date(year, parseInt(month), 0).getDate();
         const endDateString = `${year}-${normalizedMonth}-${lastDay.toString().padStart(2, '0')}`;
 
-        const startMonthDate = new Date(`${year}-${normalizedMonth}-01T00:00:00Z`);
-        const endMonthDate = new Date(year, parseInt(month), 0, 23, 59, 59, 999);
-
-        // 1. Fetch Attendance Records
         const attendance = await Attendance.find({
-            userId,
+            userId: targetUserId,
             date: { $gte: startDateString, $lte: endDateString }
         }).sort({ date: 1 });
 
-        // 2. Fetch Approved Leaves for the user that overlap with this month
-        const Leave = (await import('../Modules/LeaveModule.js')).default;
-        const leaves = await Leave.find({
-            employeeId: userId,
-            status: "Approved",
-            $or: [
-                { startDate: { $lte: endMonthDate }, endDate: { $gte: startMonthDate } }
-            ]
-        });
-
-        // 3. Construct a unified list for EVERY day of the month
         const attendanceMap = {};
         attendance.forEach(a => {
             attendanceMap[a.date] = a.toObject();
         });
 
-        leaves.forEach(leave => {
-            const start = new Date(leave.startDate);
-            const end = new Date(leave.endDate);
-            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-                if (d.getUTCFullYear() === parseInt(year) && (d.getUTCMonth() + 1) === parseInt(month)) {
-                    const dateStr = d.toISOString().split('T')[0];
-                    if (!attendanceMap[dateStr]) {
-                        attendanceMap[dateStr] = {
-                            userId,
-                            date: dateStr,
-                            status: "Leave",
-                            leaveType: leave.leaveType,
-                            isLeave: true
-                        };
-                    }
-                }
-            }
-        });
-
-        // 4. Fill in gaps for Every Day of the month
         const finalResult = [];
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const todayStr = getTodayString();
 
         for (let day = 1; day <= lastDay; day++) {
             const dateStr = `${year}-${normalizedMonth}-${day.toString().padStart(2, '0')}`;
-            // Use T00:00:00Z to avoid timezone shifts during getUTCDay
             const currentLoopDate = new Date(`${dateStr}T00:00:00Z`);
 
             if (attendanceMap[dateStr]) {
@@ -401,12 +387,12 @@ export const getAttendanceByMonth = async (req, res) => {
                 let status = "Absent";
                 if (isWeekend) {
                     status = "Weekend";
-                } else if (currentLoopDate > today) {
+                } else if (dateStr > todayStr) {
                     status = "Future";
                 }
 
                 finalResult.push({
-                    userId,
+                    userId: targetUserId,
                     date: dateStr,
                     status: status,
                     isGenerated: true
@@ -414,28 +400,338 @@ export const getAttendanceByMonth = async (req, res) => {
             }
         }
 
-        res.status(200).json({ data: finalResult });
+        return res.status(200).json({
+            success: true,
+            data: finalResult
+        });
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
-export const getAllAttendance = async (req, res) => {
+// ======================================================
+// GET TEAM / ALL ATTENDANCE (For HR / Admin / Owner)
+// ======================================================
+export const getTeamAttendance = async (req, res) => {
     try {
-        const attendance = await Attendance.find().populate('userId', 'firstName lastName email').sort({ date: -1 });
-        res.status(200).json({ data: attendance });
+        const { search, date, startDate, endDate, status, page = 1, limit = 20 } = req.query;
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 20;
+        const skip = (pageNum - 1) * limitNum;
+
+        let query = {};
+
+        if (date) {
+            query.date = date;
+        } else if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = startDate;
+            if (endDate) query.date.$lte = endDate;
+        }
+
+        if (status) {
+            query.status = status;
+        }
+
+        if (search) {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            const matchingUsers = await User.find({
+                $or: [
+                    { firstName: searchRegex },
+                    { lastName: searchRegex },
+                    { email: searchRegex },
+                    { employeeId: searchRegex }
+                ]
+            }).select('_id');
+            const userIds = matchingUsers.map(u => u._id);
+            query.userId = { $in: userIds };
+        }
+
+        const total = await Attendance.countDocuments(query);
+        const attendance = await Attendance.find(query)
+            .populate('userId', 'firstName lastName email employeeId department designation')
+            .sort({ date: -1, createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
+
+        return res.status(200).json({
+            success: true,
+            data: attendance,
+            total,
+            page: pageNum,
+            totalPages: Math.ceil(total / limitNum)
+        });
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
-export const deleteAttendance = async (req, res) => {
+// ======================================================
+// GET ATTENDANCE ANALYTICS (For Admin / Owner)
+// ======================================================
+export const getAttendanceAnalytics = async (req, res) => {
+    try {
+        const todayStr = getTodayString();
+
+        const totalEmployees = await User.countDocuments({ isActive: true, isBlocked: false });
+        const todayRecords = await Attendance.find({ date: todayStr });
+
+        let presentToday = 0;
+        let lateToday = 0;
+        let halfDayToday = 0;
+        let currentlyWorking = 0;
+
+        todayRecords.forEach(r => {
+            if (r.status === 'Present') presentToday++;
+            else if (r.status === 'Late') { presentToday++; lateToday++; }
+            else if (r.status === 'Half Day') halfDayToday++;
+            else if (r.status === 'Working' || !r.logoutTime) {
+                currentlyWorking++;
+                if (r.isLate) lateToday++;
+            }
+        });
+
+        const absentToday = Math.max(0, totalEmployees - (presentToday + halfDayToday + currentlyWorking));
+        const attendancePercentage = totalEmployees > 0
+            ? parseFloat((((presentToday + currentlyWorking) / totalEmployees) * 100).toFixed(1))
+            : 0;
+
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = (now.getMonth() + 1).toString().padStart(2, '0');
+        const monthStart = `${currentYear}-${currentMonth}-01`;
+        const monthEnd = `${currentYear}-${currentMonth}-31`;
+
+        const monthAggregation = await Attendance.aggregate([
+            { $match: { date: { $gte: monthStart, $lte: monthEnd } } },
+            { $group: { _id: "$status", count: { $sum: 1 } } }
+        ]);
+
+        const monthlyStats = {
+            Present: 0,
+            Late: 0,
+            "Half Day": 0,
+            Absent: 0,
+            Working: 0
+        };
+
+        monthAggregation.forEach(item => {
+            if (monthlyStats[item._id] !== undefined) {
+                monthlyStats[item._id] = item.count;
+            }
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                totalEmployees,
+                presentToday,
+                absentToday,
+                lateToday,
+                currentlyWorking,
+                halfDayToday,
+                attendancePercentage,
+                monthlyStats
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ======================================================
+// UPDATE / CORRECT ATTENDANCE (Admin / Owner Manual Correction with Audit History)
+// ======================================================
+export const updateAttendanceCorrection = async (req, res) => {
     try {
         const { id } = req.params;
-        const attendance = await Attendance.findByIdAndDelete(id);
-        if (!attendance) return res.status(404).json({ message: "Attendance record not found" });
-        res.status(200).json({ message: "Attendance deleted successfully" });
+        const { loginTime, logoutTime, status, locationType, isLate, reason } = req.body;
+
+        if (!reason || typeof reason !== 'string' || !reason.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "A valid reason is required for manual attendance correction"
+            });
+        }
+
+        const attendance = await Attendance.findById(id);
+        if (!attendance) {
+            return res.status(404).json({
+                success: false,
+                message: "Attendance record not found"
+            });
+        }
+
+        const modifier = await User.findById(req.user.id).select('firstName lastName').lean();
+        const modifierName = modifier ? `${modifier.firstName || ''} ${modifier.lastName || ''}`.trim() : 'Admin';
+
+        const auditEntries = [];
+
+        const trackChange = (field, oldVal, newVal) => {
+            if (newVal !== undefined && String(oldVal) !== String(newVal)) {
+                auditEntries.push({
+                    modifiedBy: req.user.id,
+                    modifiedByName: modifierName,
+                    field,
+                    oldValue: oldVal ? String(oldVal) : 'None',
+                    newValue: String(newVal),
+                    reason: reason.trim(),
+                    modifiedAt: new Date()
+                });
+            }
+        };
+
+        if (loginTime) {
+            trackChange('loginTime', attendance.loginTime?.toISOString(), new Date(loginTime).toISOString());
+            attendance.loginTime = new Date(loginTime);
+        }
+
+        if (logoutTime) {
+            trackChange('logoutTime', attendance.logoutTime?.toISOString(), new Date(logoutTime).toISOString());
+            attendance.logoutTime = new Date(logoutTime);
+            
+            const totalMinutes = calculateMinutes(attendance.loginTime, attendance.logoutTime);
+            attendance.totalWorkingMinutes = totalMinutes;
+            attendance.totalHours = parseFloat((totalMinutes / 60).toFixed(2));
+        }
+
+        if (status) {
+            trackChange('status', attendance.status, status);
+            attendance.status = status;
+        }
+
+        if (locationType) {
+            trackChange('locationType', attendance.locationType, locationType);
+            attendance.locationType = locationType;
+        }
+
+        if (isLate !== undefined) {
+            trackChange('isLate', attendance.isLate, isLate);
+            attendance.isLate = isLate;
+        }
+
+        if (auditEntries.length > 0) {
+            if (!attendance.auditHistory) attendance.auditHistory = [];
+            attendance.auditHistory.push(...auditEntries);
+        }
+
+        await attendance.save();
+
+        return res.status(200).json({
+            success: true,
+            message: "Attendance record corrected successfully",
+            data: attendance
+        });
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        return res.status(400).json({
+            success: false,
+            message: error.message || "Failed to correct attendance record"
+        });
+    }
+};
+
+// ======================================================
+// GET TEAM ATTENDANCE TODAY (HR / Admin / Owner Dashboard)
+// ======================================================
+export const getTeamAttendanceToday = async (req, res) => {
+    try {
+        const todayStr = getTodayString();
+
+        // Get all active employees
+        const activeEmployees = await User.find({
+            isActive: true,
+            isBlocked: false
+        }).select('_id firstName lastName email employeeCode department designation').lean();
+
+        const totalEmployees = activeEmployees.length;
+
+        // Get today's attendance records with user info
+        const todayRecords = await Attendance.find({ date: todayStr })
+            .populate('userId', 'firstName lastName email employeeCode department designation')
+            .lean();
+
+        // Build a set of users who have attendance records today
+        const checkedInUserIds = new Set(todayRecords.map(r => r.userId?._id?.toString() || r.userId?.toString()));
+
+        // Categorize today's records
+        let presentCount = 0;
+        let lateCount = 0;
+        let halfDayCount = 0;
+        let workingCount = 0;
+        const lateEmployees = [];
+        const notPunchedOutEmployees = [];
+
+        todayRecords.forEach(record => {
+            const userName = record.userId
+                ? `${record.userId.firstName || ''} ${record.userId.lastName || ''}`.trim()
+                : 'Unknown';
+            const userEmail = record.userId?.email || '';
+
+            if (record.status === 'Present') {
+                presentCount++;
+            } else if (record.status === 'Late') {
+                presentCount++;
+                lateCount++;
+                lateEmployees.push({ name: userName, email: userEmail, loginTime: record.loginTime });
+            } else if (record.status === 'Half Day') {
+                halfDayCount++;
+            } else if (record.status === 'Working' || !record.logoutTime) {
+                workingCount++;
+                if (record.isLate) {
+                    lateCount++;
+                    lateEmployees.push({ name: userName, email: userEmail, loginTime: record.loginTime });
+                }
+                if (!record.logoutTime) {
+                    notPunchedOutEmployees.push({ name: userName, email: userEmail, loginTime: record.loginTime });
+                }
+            }
+        });
+
+        // Employees who haven't checked in yet today
+        const notCheckedInEmployees = activeEmployees
+            .filter(emp => !checkedInUserIds.has(emp._id.toString()))
+            .map(emp => ({
+                name: `${emp.firstName || ''} ${emp.lastName || ''}`.trim(),
+                email: emp.email,
+                department: emp.department
+            }));
+
+        const absentCount = notCheckedInEmployees.length;
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                date: todayStr,
+                totalEmployees,
+                presentCount,
+                lateCount,
+                halfDayCount,
+                workingCount,
+                absentCount,
+                attendanceRate: totalEmployees > 0
+                    ? parseFloat((((presentCount + workingCount) / totalEmployees) * 100).toFixed(1))
+                    : 0,
+                needsAttention: {
+                    notCheckedIn: notCheckedInEmployees,
+                    lateArrivals: lateEmployees,
+                    notPunchedOut: notPunchedOutEmployees
+                }
+            }
+        });
+    } catch (error) {
+        console.error("Team Attendance Today Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || "Failed to load team attendance overview"
+        });
     }
 };

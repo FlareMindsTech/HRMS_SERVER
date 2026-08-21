@@ -36,7 +36,7 @@ import auth from './Routes/AuthRouter.js';
 import permission from './Routes/PermissionRouter.js';
 import { seedRBACFoundation } from './Services/PermissionSeedService.js';
 
-dotenv.config();
+dotenv.config({ override: true });
 
 const app = express();
 

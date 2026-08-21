@@ -3,42 +3,41 @@ import {
   punchIn,
   punchOut,
   getTodayAttendance,
-  getAllAttendance,
-  getAttendanceByUser,
+  getMyAttendance,
   getAttendanceByMonth,
+  getTeamAttendance,
+  getAttendanceAnalytics,
   updateAttendanceCorrection,
-  deleteAttendance,
+  getTeamAttendanceToday,
 } from '../Controller/AttendanceController.js';
 import {
   Authentication,
   requirePermission,
-  requireOwnershipOrPermission,
 } from '../Middleware/Auth.js';
 
 const router = express.Router();
 
+// Require valid JWT authentication for all attendance routes
 router.use(Authentication);
 
-// ── Employee Attendance Punch Actions ──
+// ── Punch In / Punch Out Actions (Employee & HR) ──
 router.post('/punch-in', requirePermission('attendance.punch_in'), punchIn);
 router.post('/punch-out', requirePermission('attendance.punch_out'), punchOut);
 router.get('/today', requirePermission('attendance.read.own'), getTodayAttendance);
 
-// ── User Attendance Queries (Protected against IDOR) ──
-router.get(
-  '/user/:userId',
-  requireOwnershipOrPermission('userId', 'attendance.read.own', 'attendance.read.all'),
-  getAttendanceByUser
-);
-router.get(
-  '/user/:userId/:month/:year',
-  requireOwnershipOrPermission('userId', 'attendance.read.own', 'attendance.read.all'),
-  getAttendanceByMonth
-);
+// ── Own Attendance Queries (Securely derives userId from req.user) ──
+router.get('/my', requirePermission('attendance.read.own'), getMyAttendance);
+router.get('/month/:month/:year', requirePermission('attendance.read.own'), getAttendanceByMonth);
 
-// ── Admin Attendance Management ──
-router.get('/all', requirePermission('attendance.read.all'), getAllAttendance);
-router.put('/correction/:id', requirePermission('attendance.correct'), updateAttendanceCorrection);
-router.delete('/delete/:id', requirePermission('attendance.delete'), deleteAttendance);
+// ── Team / Organization Attendance (HR uses read.team, Admin uses read.all) ──
+router.get('/team/today', requirePermission('attendance.read.team'), getTeamAttendanceToday);
+router.get('/team', requirePermission('attendance.read.team'), getTeamAttendance);
+router.get('/all', requirePermission('attendance.read.all'), getTeamAttendance);
+
+// ── Attendance Analytics (Admin & Owner) ──
+router.get('/analytics', requirePermission('attendance.analytics'), getAttendanceAnalytics);
+
+// ── Manual Attendance Correction with Audit Log (Admin & Owner) ──
+router.put('/correction/:id', requirePermission('attendance.modify'), updateAttendanceCorrection);
 
 export default router;

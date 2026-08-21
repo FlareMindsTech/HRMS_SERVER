@@ -40,14 +40,44 @@ const attendanceSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["Present", "Half Day", "Absent", "Leave"],
+      enum: ["Present", "Half Day", "Absent", "Leave", "Late", "Working"],
       default: "Present"
     },
 
     isLate: {
       type: Boolean,
       default: false
-    }
+    },
+
+    punchInLocation: {
+      latitude: { type: Number },
+      longitude: { type: Number },
+      accuracy: { type: Number }
+    },
+
+    punchOutLocation: {
+      latitude: { type: Number },
+      longitude: { type: Number },
+      accuracy: { type: Number }
+    },
+
+    auditHistory: [
+      {
+        modifiedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User"
+        },
+        modifiedByName: { type: String },
+        field: { type: String },
+        oldValue: { type: String },
+        newValue: { type: String },
+        reason: { type: String },
+        modifiedAt: {
+          type: Date,
+          default: Date.now
+        }
+      }
+    ]
   },
   { timestamps: true }
 );
