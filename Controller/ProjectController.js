@@ -17,6 +17,7 @@ export const ALL_PROJECT_PERMISSIONS = [
 
 export const isProjectManagerUser = (user) => {
     if (!user) return false;
+    if (user.roleCode === "PROJECT_MANAGER") return true;
     if (user.priority !== 3) return false;
     const perms = user.permissions || [];
     if (perms.includes("*")) return true;
