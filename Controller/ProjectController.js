@@ -1,12 +1,89 @@
+import mongoose from "mongoose";
 import Project from "../Modules/ProjectModule.js";
 import User from "../Modules/UserModule.js";
 import Task from "../Modules/TaskModule.js";
 import Sprint from "../Modules/SprintModule.js";
 import TimeTracking from "../Modules/TimeTrackingModule.js";
+import RolePermission from "../Modules/RolePermissionModule.js";
+
+export const ALL_PROJECT_PERMISSIONS = [
+    "project.read",
+    "project.create",
+    "project.update",
+    "project.delete",
+    "project.add_member",
+    "project.remove_member"
+];
+
+export const isProjectManagerUser = (user) => {
+    if (!user) return false;
+    if (user.priority !== 3) return false;
+    const perms = user.permissions || [];
+    if (perms.includes("*")) return true;
+    return ALL_PROJECT_PERMISSIONS.every(p => perms.includes(p));
+};
+
+export const isOwnerOrAdminUser = (user) => {
+    if (!user) return false;
+    return user.priority === 1 || user.priority === 2 || (user.permissions && user.permissions.includes("*"));
+};
+
+export const getEligibleProjectManagers = async (req, res) => {
+    try {
+        const users = await User.find({ isActive: true, isBlocked: false })
+            .select("firstName lastName email role employeeCode")
+            .populate({
+                path: "role",
+                select: "_id roleName roleCode priority isActive isBlock isBlocked"
+            })
+            .lean();
+
+        const eligibleUsers = [];
+        for (const user of users) {
+            if (!user.role || !user.role.isActive || user.role.isBlock || user.role.isBlocked) continue;
+
+            if (user.role.priority === 3) {
+                const rolePermissionDocs = await RolePermission.find({ roleId: user.role._id })
+                    .populate({ path: "permissionId", select: "permissionCode isActive" })
+                    .lean();
+
+                const activePerms = rolePermissionDocs
+                    .filter(rp => rp.permissionId && rp.permissionId.isActive)
+                    .map(rp => rp.permissionId.permissionCode);
+
+                const hasAll6 = ALL_PROJECT_PERMISSIONS.every(p => activePerms.includes(p));
+                if (hasAll6) {
+                    eligibleUsers.push(user);
+                }
+            }
+        }
+
+        return res.status(200).json({ success: true, data: eligibleUsers });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const getCompanyUsersForProject = async (req, res) => {
+    try {
+        const users = await User.find({ isActive: true, isBlocked: false })
+            .select("firstName lastName email role employeeCode")
+            .populate({
+                path: "role",
+                select: "_id roleName roleCode priority"
+            })
+            .sort({ firstName: 1 })
+            .lean();
+
+        return res.status(200).json({ success: true, data: users });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 export const createProject = async (req, res) => {
     try {
-        const { projectName, description, startDate, endDate, estimatedBudget } = req.body;
+        const { projectName, description, startDate, endDate, estimatedBudget, projectManager } = req.body;
 
         if (!projectName) {
             return res.status(400).json({ success: false, message: "Project Name is required" });
@@ -18,6 +95,8 @@ export const createProject = async (req, res) => {
             startDate,
             endDate,
             estimatedBudget: estimatedBudget || 0,
+            projectManager: projectManager || undefined,
+            projectManagerAddedBy: projectManager && req.user ? req.user.id : undefined,
         });
 
         await newProject.save();
@@ -45,17 +124,17 @@ export const addProjectMember = async (req, res) => {
 
         let isAuthorized = true;
         if (requestorId) {
-            const requestor = await User.findById(requestorId).populate("role");
-            const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
+            const isOwnerOrAdmin = isOwnerOrAdminUser(req.user);
+            const isPM = isProjectManagerUser(req.user) && project.projectManager && project.projectManager.toString() === requestorId;
 
-            if (!isOwnerOrAdmin) {
-                const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
-                const newMemberRoleName = newMember.role.roleName.toLowerCase();
-
-                if (requestorRoleName === "project manager") {
-                    if (!["team lead", "software developer", "intern"].includes(newMemberRoleName)) isAuthorized = false;
-                } else if (requestorRoleName === "team lead") {
-                    if (!["software developer", "intern"].includes(newMemberRoleName)) isAuthorized = false;
+            if (!isOwnerOrAdmin && !isPM) {
+                const requestorRoleName = req.user.roleName?.toLowerCase() || "";
+                const isTL = project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === requestorId);
+                if (isTL || requestorRoleName === "team lead") {
+                    const newMemberRoleName = newMember.role.roleName.toLowerCase();
+                    if (!["software developer", "developer", "intern"].includes(newMemberRoleName)) {
+                        isAuthorized = false;
+                    }
                 } else {
                     isAuthorized = false;
                 }
@@ -63,12 +142,21 @@ export const addProjectMember = async (req, res) => {
         }
 
         if (!isAuthorized) {
-            return res.status(403).json({ success: false, message: "You are not authorized to add this role to the project based on priority rules." });
+            return res.status(403).json({ success: false, message: "You are not authorized to add this member to the project." });
         }
+
+        // Check if member is PM (priority === 3 and has all 6 project permissions, or roleName project manager)
+        const rolePermissionDocs = await RolePermission.find({ roleId: newMember.role._id })
+            .populate({ path: "permissionId", select: "permissionCode isActive" })
+            .lean();
+        const activePerms = rolePermissionDocs
+            .filter(rp => rp.permissionId && rp.permissionId.isActive)
+            .map(rp => rp.permissionId.permissionCode);
+        const isMemberPM = newMember.role.priority === 3 && ALL_PROJECT_PERMISSIONS.every(p => activePerms.includes(p));
 
         const newMemberRoleName = newMember.role.roleName.toLowerCase();
 
-        if (newMemberRoleName === "project manager") {
+        if (isMemberPM || ["project manager", "pm"].includes(newMemberRoleName)) {
             project.projectManager = newMemberId;
             project.projectManagerAddedBy = requestorId;
         } else if (newMemberRoleName === "team lead") {
@@ -77,7 +165,7 @@ export const addProjectMember = async (req, res) => {
             } else {
                 return res.status(400).json({ success: false, message: "Member already exists in Team Leads" });
             }
-        } else if (newMemberRoleName === "software developer") {
+        } else if (newMemberRoleName.includes("developer") || newMemberRoleName === "software developer") {
             if (!project.softwareDevelopers.some(m => m.userId.toString() === newMemberId)) {
                 project.softwareDevelopers.push({ userId: newMemberId, addedBy: requestorId });
             } else {
@@ -90,7 +178,12 @@ export const addProjectMember = async (req, res) => {
                 return res.status(400).json({ success: false, message: "Member already exists in Interns" });
             }
         } else {
-            return res.status(400).json({ success: false, message: "Invalid role for project assignment" });
+            // Default to software Developers array for other employee roles
+            if (!project.softwareDevelopers.some(m => m.userId.toString() === newMemberId)) {
+                project.softwareDevelopers.push({ userId: newMemberId, addedBy: requestorId });
+            } else {
+                return res.status(400).json({ success: false, message: "Member already exists in Project" });
+            }
         }
 
         await project.save();
@@ -139,13 +232,18 @@ export const getAllProjects = async (req, res) => {
 export const getMyProjects = async (req, res) => {
     try {
         const userId = req.user.id;
+        const userObjId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
 
         const projects = await Project.find({
             $or: [
                 { projectManager: userId },
+                { projectManager: userObjId },
                 { "teamLeads.userId": userId },
+                { "teamLeads.userId": userObjId },
                 { "softwareDevelopers.userId": userId },
+                { "softwareDevelopers.userId": userObjId },
                 { "interns.userId": userId },
+                { "interns.userId": userObjId },
             ],
         })
             .populate('projectManager', 'firstName lastName email')
@@ -169,11 +267,16 @@ export const updateProject = async (req, res) => {
         if (userId) {
             const requestor = await User.findById(userId).populate("role");
             const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+            const requestorPriority = requestor?.role?.priority ?? req.user?.priority;
 
             let canUpdate = false;
-            if (requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*")) {
+            if (requestorPriority <= 2 || isOwnerOrAdminUser(req.user)) {
                 canUpdate = true;
-            } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
+            } else if (
+                (isProjectManagerUser(req.user) || ["project manager", "pm"].includes(requestorRoleName) || requestorPriority === 3) &&
+                project.projectManager &&
+                project.projectManager.toString() === userId.toString()
+            ) {
                 canUpdate = true;
             }
 
@@ -234,13 +337,14 @@ export const removeProjectMember = async (req, res) => {
         if (requestorId) {
             const requestor = await User.findById(requestorId).populate("role");
             const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
+            const requestorPriority = requestor?.role?.priority ?? req.user?.priority;
 
             let isAuthorized = false;
-            const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
+            const isOwnerOrAdmin = requestorPriority <= 2 || isOwnerOrAdminUser(req.user);
 
             if (isOwnerOrAdmin) {
                 isAuthorized = true;
-            } else if (requestorRoleName === "project manager") {
+            } else if (isProjectManagerUser(req.user) || ["project manager", "pm"].includes(requestorRoleName) || requestorPriority === 3) {
                 isAuthorized = true;
             } else if (requestorRoleName === "team lead") {
                 if (["softwareDevelopers", "interns"].includes(memberRole)) {
@@ -291,12 +395,17 @@ export const deleteProject = async (req, res) => {
         if (userId) {
             const requestor = await User.findById(userId).populate("role");
             const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
-            const isOwnerOrAdmin = requestor?.role?.priority <= 2 || req.user?.priority <= 2 || req.user?.permissions?.includes("*");
+            const requestorPriority = requestor?.role?.priority ?? req.user?.priority;
+            const isOwnerOrAdmin = requestorPriority <= 2 || isOwnerOrAdminUser(req.user);
 
             let canDelete = false;
             if (isOwnerOrAdmin) {
                 canDelete = true;
-            } else if (requestorRoleName === "project manager" && project.projectManager && project.projectManager.toString() === userId) {
+            } else if (
+                (isProjectManagerUser(req.user) || ["project manager", "pm"].includes(requestorRoleName) || requestorPriority === 3) &&
+                project.projectManager &&
+                project.projectManager.toString() === userId.toString()
+            ) {
                 canDelete = true;
             }
 

@@ -58,6 +58,16 @@ const taskSchema = new mongoose.Schema(
             type: Number,
             default: 0,
         },
+        completedAt: {
+            type: Date,
+        },
+        completedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+        },
+        completionNote: {
+            type: String,
+        },
     },
     {
         timestamps: true,

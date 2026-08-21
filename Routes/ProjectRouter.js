@@ -14,6 +14,8 @@ import {
     getProjectTimeSummary,
     getProjectMetrics,
     getProjectSprintMetrics,
+    getEligibleProjectManagers,
+    getCompanyUsersForProject,
 } from "../Controller/ProjectController.js";
 import { getProjectSprints } from "../Controller/SprintController.js";
 import { getTasksByProject } from "../Controller/TaskController.js";
@@ -26,6 +28,8 @@ router.use(Authentication);
 // Read Projects & Details
 router.get("/getAllProjects", requirePermission("project.read"), getAllProjects);
 router.get("/getMyProjects", requirePermission("project.read"), getMyProjects);
+router.get("/getEligiblePMs", requirePermission("project.read"), getEligibleProjectManagers);
+router.get("/getCompanyUsers", requirePermission("project.read"), getCompanyUsersForProject);
 router.get("/getProjectDetails/:id", requirePermission("project.read"), getProjectDetails);
 
 // Feature 1 & 2: Project-level Sprints & Tasks

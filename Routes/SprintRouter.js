@@ -8,22 +8,22 @@ import {
     getSprintTasks,
     deleteSprint
 } from "../Controller/SprintController.js";
-import { Authendication } from "../Middleware/Auth.js";
+import { Authentication, requirePermission } from "../Middleware/Auth.js";
 
 const router = express.Router();
 
-router.use(Authendication);
+router.use(Authentication);
 
 // Sprint Management Routes
-router.post("/create", createSprint);
-router.put("/:id/status", updateSprintStatus);
-router.get("/project/:projectId", getProjectSprints);
-router.get("/:sprintId/tasks", getSprintTasks);
+router.post("/create", requirePermission("project.update"), createSprint);
+router.put("/:id/status", requirePermission("project.update"), updateSprintStatus);
+router.get("/project/:projectId", requirePermission("project.read"), getProjectSprints);
+router.get("/:sprintId/tasks", requirePermission("project.read"), getSprintTasks);
 
 // Legacy/Helper Routes
-router.get("/getByProject/:projectId", getProjectSprints);
-router.get("/getById/:id", getSprintById);
-router.put("/update/:id", updateSprint);
-router.delete("/delete/:id", deleteSprint);
+router.get("/getByProject/:projectId", requirePermission("project.read"), getProjectSprints);
+router.get("/getById/:id", requirePermission("project.read"), getSprintById);
+router.put("/update/:id", requirePermission("project.update"), updateSprint);
+router.delete("/delete/:id", requirePermission("project.delete"), deleteSprint);
 
 export default router;

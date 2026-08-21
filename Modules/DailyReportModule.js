@@ -19,6 +19,13 @@ const DailyReportSchema = new Schema(
             index: true
         },
 
+        projectId: {
+            type: Schema.Types.ObjectId,
+            ref: "Project",
+            required: [true, "Project is required"],
+            index: true
+        },
+
         reportDate: {
             type: Date,
             required: [true, "Report date is required"],
@@ -76,7 +83,7 @@ const DailyReportSchema = new Schema(
 );
 
 DailyReportSchema.index(
-    { submittedBy: 1, reportDate: 1, shift: 1 },
+    { submittedBy: 1, projectId: 1, reportDate: 1, shift: 1 },
     { unique: true }
 );
 

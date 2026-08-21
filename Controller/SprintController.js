@@ -1,15 +1,21 @@
 import Sprint from "../Modules/SprintModule.js";
 import Project from "../Modules/ProjectModule.js";
 import Task from "../Modules/TaskModule.js";
+import { isProjectManagerUser, isOwnerOrAdminUser } from "./ProjectController.js";
 
 // Helper: PM / TeamLead / Admin-Owner check
 const canManageSprint = (req, project) => {
-    if (!req.user) return true; // no auth context, skip (shouldn't happen, route is protected)
-    const userId = req.user.id;
-    const isOwnerOrAdmin = req.user.priority <= 2;
-    const isProjectManager = project.projectManager && project.projectManager.toString() === userId;
+    if (!req.user) return true;
+    const userId = req.user.id ? req.user.id.toString() : null;
+    const requestorRoleName = req.user.roleName ? req.user.roleName.toLowerCase() : (req.user.role ? req.user.role.roleName?.toLowerCase() : "");
+    const userPriority = req.user.priority ?? req.user.role?.priority;
+
+    const isOwnerOrAdmin = userPriority <= 2 || isOwnerOrAdminUser(req.user);
+    const isPMCapable = isProjectManagerUser(req.user) || ["project manager", "pm"].includes(requestorRoleName) || userPriority === 3;
+    const isAssignedPM = project.projectManager && project.projectManager.toString() === userId;
     const isTeamLead = project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId);
-    return isOwnerOrAdmin || isProjectManager || isTeamLead;
+
+    return isOwnerOrAdmin || isPMCapable || isAssignedPM || isTeamLead;
 };
 
 export const createSprint = async (req, res) => {
@@ -66,7 +72,7 @@ export const updateSprintStatus = async (req, res) => {
         const { id } = req.params;
         const { status } = req.body;
 
-        const validStatuses = ["Planned", "Active", "Completed"];
+        const validStatuses = ["Planned", "Active", "In Progress", "Completed"];
         if (!status || !validStatuses.includes(status)) {
             return res.status(400).json({
                 success: false,

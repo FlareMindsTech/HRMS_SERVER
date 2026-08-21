@@ -1,34 +1,30 @@
 import express from "express";
 import {
     createTask,
-    getTasksByProject,
-    getTasksBySprint,
     updateTaskStatus,
     reassignTask,
     getMyTasks,
     getTaskById,
+    getTasksByProject,
+    getTasksBySprint,
     updateTask,
     deleteTask
 } from "../Controller/TaskController.js";
-import { Authendication } from "../Middleware/Auth.js";
+import { Authentication, requirePermission } from "../Middleware/Auth.js";
 
 const router = express.Router();
 
-router.use(Authendication);
+router.use(Authentication);
 
-// Task Assignment & Tracking Routes
-router.post("/create", createTask);
-router.get("/myTasks", getMyTasks);
-router.put("/:id/status", updateTaskStatus);
-router.put("/:id/assign", reassignTask);
-router.get("/project/:projectId", getTasksByProject);
-router.get("/sprint/:sprintId", getTasksBySprint);
-
-// Legacy/Helper Routes
-router.get("/getByProject/:projectId", getTasksByProject);
-router.put("/updateStatus/:id", updateTaskStatus);
-router.get("/getById/:id", getTaskById);
-router.put("/update/:id", updateTask);
-router.delete("/delete/:id", deleteTask);
+// Task Management Routes
+router.post("/create", requirePermission("project.update"), createTask);
+router.put("/:id/status", requirePermission("project.read"), updateTaskStatus);
+router.put("/:id/reassign", requirePermission("project.update"), reassignTask);
+router.get("/my-tasks", requirePermission("project.read"), getMyTasks);
+router.get("/project/:projectId", requirePermission("project.read"), getTasksByProject);
+router.get("/sprint/:sprintId", requirePermission("project.read"), getTasksBySprint);
+router.get("/:id", requirePermission("project.read"), getTaskById);
+router.put("/:id", requirePermission("project.update"), updateTask);
+router.delete("/delete/:id", requirePermission("project.delete"), deleteTask);
 
 export default router;

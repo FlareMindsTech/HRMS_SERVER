@@ -3,6 +3,7 @@ import Project from "../Modules/ProjectModule.js";
 import User from "../Modules/UserModule.js";
 import Notification from "../Modules/NotificationModule.js";
 import mongoose from "mongoose";
+import { isProjectManagerUser, isOwnerOrAdminUser } from "./ProjectController.js";
 
 export const createTask = async (req, res) => {
     const session = await mongoose.startSession();
@@ -34,6 +35,23 @@ export const createTask = async (req, res) => {
             await session.abortTransaction();
             session.endSession();
             return res.status(404).json({ success: false, message: "Project not found" });
+        }
+
+        const userId = req.user ? req.user.id : null;
+        if (userId) {
+            const isOwner = isOwnerOrAdminUser(req.user);
+            let isManagerOrTL = false;
+            if (projectExists.projectManager && projectExists.projectManager.toString() === userId && isProjectManagerUser(req.user)) {
+                isManagerOrTL = true;
+            }
+            if (projectExists.teamLeads && projectExists.teamLeads.some(tl => tl.userId.toString() === userId)) {
+                isManagerOrTL = true;
+            }
+            if (!isOwner && !isManagerOrTL) {
+                await session.abortTransaction();
+                session.endSession();
+                return res.status(403).json({ success: false, message: "Only Project Manager, Team Lead, or Owner/Admin can create tasks" });
+            }
         }
 
         const newTask = new Task({
@@ -88,6 +106,7 @@ export const getTasksByProject = async (req, res) => {
         const tasks = await Task.find({ projectId })
             .populate("assignedTo", "firstName lastName email")
             .populate("assignedBy", "firstName lastName email")
+            .populate("completedBy", "firstName lastName email")
             .populate("sprintId", "sprintName status")
             .sort({ createdAt: -1 });
 
@@ -103,6 +122,7 @@ export const getTasksBySprint = async (req, res) => {
         const tasks = await Task.find({ sprintId })
             .populate("assignedTo", "firstName lastName email")
             .populate("assignedBy", "firstName lastName email")
+            .populate("completedBy", "firstName lastName email")
             .sort({ createdAt: -1 });
 
         return res.status(200).json({ success: true, data: tasks });
@@ -114,14 +134,14 @@ export const getTasksBySprint = async (req, res) => {
 export const updateTaskStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status } = req.body;
+        const { status, completionNote } = req.body;
         const userId = req.user ? req.user.id : null;
 
         const validStatuses = ["To Do", "In Progress", "Testing", "Completed"];
         if (!status || !validStatuses.includes(status)) {
             return res.status(400).json({
                 success: false,
-                message: `Invalid status. Status flow: ${validStatuses.join(" -> ")}`
+                message: `Invalid status. Valid statuses: ${validStatuses.join(", ")}`
             });
         }
 
@@ -130,13 +150,13 @@ export const updateTaskStatus = async (req, res) => {
 
         if (userId) {
             const isAssignee = task.assignedTo && task.assignedTo.toString() === userId;
-            const isOwner = req.user.priority <= 2 || req.user.isOwner;
+            const isOwner = isOwnerOrAdminUser(req.user);
 
             let isManagerOrTL = false;
             if (task.projectId) {
                 const project = await Project.findById(task.projectId._id || task.projectId);
                 if (project) {
-                    if (project.projectManager && project.projectManager.toString() === userId) {
+                    if (project.projectManager && project.projectManager.toString() === userId && isProjectManagerUser(req.user)) {
                         isManagerOrTL = true;
                     }
                     if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
@@ -146,19 +166,18 @@ export const updateTaskStatus = async (req, res) => {
             }
 
             if (!isAssignee && !isOwner && !isManagerOrTL) {
-                return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to update this task" });
+                return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to update status for this task" });
             }
         }
 
-        // Status transition validation — linear flow, Testing can bounce back to In Progress
         const validTransitions = {
-            "To Do": ["In Progress"],
-            "In Progress": ["Testing", "To Do"],
+            "To Do": ["In Progress", "Completed"],
+            "In Progress": ["Testing", "Completed", "To Do"],
             "Testing": ["Completed", "In Progress"],
-            "Completed": []
+            "Completed": ["In Progress"]
         };
 
-        const isOwnerBypass = req.user && (req.user.priority <= 2 || req.user.isOwner);
+        const isOwnerBypass = req.user && isOwnerOrAdminUser(req.user);
         if (!isOwnerBypass && status !== task.status) {
             const allowedNext = validTransitions[task.status] || [];
             if (!allowedNext.includes(status)) {
@@ -171,6 +190,15 @@ export const updateTaskStatus = async (req, res) => {
         }
 
         task.status = status;
+
+        if (status === "Completed") {
+            task.completedAt = new Date();
+            task.completedBy = userId || task.assignedTo;
+            if (completionNote !== undefined) {
+                task.completionNote = completionNote;
+            }
+        }
+
         await task.save();
 
         return res.status(200).json({ success: true, message: "Task status updated successfully", data: task });
@@ -178,6 +206,7 @@ export const updateTaskStatus = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 export const reassignTask = async (req, res) => {
     try {
         const { id } = req.params;
@@ -195,13 +224,32 @@ export const reassignTask = async (req, res) => {
         const task = await Task.findById(id);
         if (!task) return res.status(404).json({ success: false, message: "Task not found" });
 
+        const userId = req.user ? req.user.id : null;
+        if (userId) {
+            const isOwner = isOwnerOrAdminUser(req.user);
+            let isManagerOrTL = false;
+            if (task.projectId) {
+                const project = await Project.findById(task.projectId);
+                if (project) {
+                    if (project.projectManager && project.projectManager.toString() === userId && isProjectManagerUser(req.user)) {
+                        isManagerOrTL = true;
+                    }
+                    if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
+                        isManagerOrTL = true;
+                    }
+                }
+            }
+            if (!isOwner && !isManagerOrTL) {
+                return res.status(403).json({ success: false, message: "Only Project Manager, Team Lead, or Owner/Admin can reassign tasks" });
+            }
+        }
+
         task.assignedTo = assignedTo;
         if (req.user) {
             task.assignedBy = req.user.id;
         }
         await task.save();
 
-        // Trigger notification if supported
         try {
             const notification = new Notification({
                 userId: assignedTo,
@@ -235,6 +283,7 @@ export const getMyTasks = async (req, res) => {
         const tasks = await Task.find(filter)
             .populate("projectId", "projectName")
             .populate("assignedBy", "firstName lastName")
+            .populate("completedBy", "firstName lastName email")
             .populate("sprintId", "sprintName status")
             .sort({ dueDate: 1 });
 
@@ -252,6 +301,7 @@ export const getTaskById = async (req, res) => {
             .populate("projectId", "projectName")
             .populate("assignedTo", "firstName lastName email")
             .populate("assignedBy", "firstName lastName email")
+            .populate("completedBy", "firstName lastName email")
             .populate("sprintId", "sprintName status");
 
         if (!task) return res.status(404).json({ success: false, message: "Task not found" });
@@ -276,7 +326,8 @@ export const updateTask = async (req, res) => {
             attachments,
             storyPoints,
             estimatedHours,
-            status
+            status,
+            completionNote
         } = req.body;
         const userId = req.user ? req.user.id : null;
 
@@ -284,13 +335,13 @@ export const updateTask = async (req, res) => {
         if (!task) return res.status(404).json({ success: false, message: "Task not found" });
 
         if (userId) {
-            const isOwner = req.user.priority <= 2 || req.user.isOwner;
+            const isOwner = isOwnerOrAdminUser(req.user);
 
             let isManagerOrTL = false;
             if (task.projectId) {
                 const project = await Project.findById(task.projectId._id || task.projectId);
                 if (project) {
-                    if (project.projectManager && project.projectManager.toString() === userId) {
+                    if (project.projectManager && project.projectManager.toString() === userId && isProjectManagerUser(req.user)) {
                         isManagerOrTL = true;
                     }
                     if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
@@ -299,8 +350,8 @@ export const updateTask = async (req, res) => {
                 }
             }
 
-            if (!isOwner && !isManagerOrTL && task.assignedTo?.toString() !== userId) {
-                return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to update this task" });
+            if (!isOwner && !isManagerOrTL) {
+                return res.status(403).json({ success: false, message: "Secure Rule Violation: Only Project Manager, Team Lead, or Owner/Admin can edit task details" });
             }
         }
 
@@ -314,7 +365,14 @@ export const updateTask = async (req, res) => {
         if (attachments !== undefined) task.attachments = attachments;
         if (storyPoints !== undefined) task.storyPoints = storyPoints;
         if (estimatedHours !== undefined) task.estimatedHours = estimatedHours;
-        if (status !== undefined) task.status = status;
+        if (status !== undefined) {
+            task.status = status;
+            if (status === "Completed") {
+                task.completedAt = new Date();
+                task.completedBy = userId || task.assignedTo;
+                if (completionNote !== undefined) task.completionNote = completionNote;
+            }
+        }
 
         await task.save();
 

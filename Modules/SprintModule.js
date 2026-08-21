@@ -24,7 +24,7 @@ const sprintSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ["Planned", "Active", "Completed"],
+            enum: ["Planned", "Active", "In Progress", "Completed"],
             default: "Planned",
         },
     },
