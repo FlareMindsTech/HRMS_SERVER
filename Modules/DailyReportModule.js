@@ -34,18 +34,15 @@ const DailyReportSchema = new Schema(
 
         shift: {
             type: String,
-            enum: {
-                values: ["09:00-13:00", "14:00-18:00", "FULL_DAY"],
-                message: "Invalid shift"
-            },
-            required: true
+            default: "FULL_DAY",
+            trim: true
         },
 
         title: {
             type: String,
-            required: [true, "Title is required"],
+            required: false,
+            default: "Work Update",
             trim: true,
-            minlength: [5, "Title must be at least 5 characters"],
             maxlength: [100, "Title cannot exceed 100 characters"],
             set: toTitleCase
         },
@@ -54,8 +51,8 @@ const DailyReportSchema = new Schema(
             type: String,
             required: [true, "Description is required"],
             trim: true,
-            minlength: [10, "Description must be at least 10 characters"],
-            maxlength: [1000, "Description too long"],
+            minlength: [5, "Description must be at least 5 characters"],
+            maxlength: [2000, "Description too long"],
             set: toTitleCase
         },
 
@@ -71,6 +68,25 @@ const DailyReportSchema = new Schema(
             type: String,
             trim: true
         },
+
+        comments: [
+            {
+                commentedBy: {
+                    type: Schema.Types.ObjectId,
+                    ref: "User",
+                    required: true
+                },
+                commentText: {
+                    type: String,
+                    required: true,
+                    trim: true
+                },
+                createdAt: {
+                    type: Date,
+                    default: Date.now
+                }
+            }
+        ],
 
         submittedAt: {
             type: Date,

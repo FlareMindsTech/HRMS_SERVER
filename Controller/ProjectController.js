@@ -17,16 +17,38 @@ export const ALL_PROJECT_PERMISSIONS = [
 
 export const isProjectManagerUser = (user) => {
     if (!user) return false;
-    if (user.roleCode === "PROJECT_MANAGER") return true;
-    if (user.priority !== 3) return false;
-    const perms = user.permissions || [];
-    if (perms.includes("*")) return true;
-    return ALL_PROJECT_PERMISSIONS.every(p => perms.includes(p));
+    const roleCode = user.roleCode || user.role?.roleCode;
+    return roleCode === "PROJECT_MANAGER";
 };
 
 export const isOwnerOrAdminUser = (user) => {
     if (!user) return false;
-    return user.priority === 1 || user.priority === 2 || (user.permissions && user.permissions.includes("*"));
+    const priority = user.priority ?? user.role?.priority;
+    return priority === 1 || priority === 2 || (user.permissions && user.permissions.includes("*"));
+};
+
+export const canPerformProjectAction = (req, project, requiredPermission) => {
+    if (!req.user || !project) return false;
+
+    // Step 1: Owner / Admin check
+    if (isOwnerOrAdminUser(req.user)) {
+        return true;
+    }
+
+    // Step 2: Check if logged-in user is the assigned Project Manager for this project
+    const userId = req.user.id ? req.user.id.toString() : null;
+    const isAssignedPM = project.projectManager && project.projectManager.toString() === userId;
+    if (!isAssignedPM) {
+        return false;
+    }
+
+    // Step 3: Check user's actual permissions for the required action
+    const userPermissions = req.user.permissions || [];
+    if (userPermissions.includes("*") || userPermissions.includes(requiredPermission)) {
+        return true;
+    }
+
+    return false;
 };
 
 export const getEligibleProjectManagers = async (req, res) => {
@@ -43,6 +65,13 @@ export const getEligibleProjectManagers = async (req, res) => {
         for (const user of users) {
             if (!user.role || !user.role.isActive || user.role.isBlock || user.role.isBlocked) continue;
 
+            // Option A: Seeded Default PM Role
+            if (user.role.roleCode === "PROJECT_MANAGER") {
+                eligibleUsers.push(user);
+                continue;
+            }
+
+            // Option B: Custom PM Role (priority === 3 AND has at least one active project.* permission)
             if (user.role.priority === 3) {
                 const rolePermissionDocs = await RolePermission.find({ roleId: user.role._id })
                     .populate({ path: "permissionId", select: "permissionCode isActive" })
@@ -52,8 +81,8 @@ export const getEligibleProjectManagers = async (req, res) => {
                     .filter(rp => rp.permissionId && rp.permissionId.isActive)
                     .map(rp => rp.permissionId.permissionCode);
 
-                const hasAll6 = ALL_PROJECT_PERMISSIONS.every(p => activePerms.includes(p));
-                if (hasAll6) {
+                const hasAnyProjectPerm = activePerms.some(p => p && p.startsWith("project."));
+                if (hasAnyProjectPerm) {
                     eligibleUsers.push(user);
                 }
             }
@@ -123,12 +152,9 @@ export const addProjectMember = async (req, res) => {
         const newMember = await User.findById(newMemberId).populate("role");
         if (!newMember || !newMember.role) return res.status(404).json({ success: false, message: "New member or their role not found" });
 
-        let isAuthorized = true;
         if (requestorId) {
-            const isOwnerOrAdmin = isOwnerOrAdminUser(req.user);
-            const isPM = isProjectManagerUser(req.user) && project.projectManager && project.projectManager.toString() === requestorId;
-
-            if (!isOwnerOrAdmin && !isPM) {
+            let isAuthorized = canPerformProjectAction(req, project, "project.add_member");
+            if (!isAuthorized) {
                 const requestorRoleName = req.user.roleName?.toLowerCase() || "";
                 const isTL = project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === requestorId);
                 if (isTL || requestorRoleName === "team lead") {
@@ -140,37 +166,19 @@ export const addProjectMember = async (req, res) => {
                     isAuthorized = false;
                 }
             }
-        }
 
-        if (!isAuthorized) {
-            return res.status(403).json({ success: false, message: "You are not authorized to add this member to the project." });
+            if (!isAuthorized) {
+                return res.status(403).json({ success: false, message: "You are not authorized to add this member to the project." });
+            }
         }
-
-        // Check if member is PM (priority === 3 and has all 6 project permissions, or roleName project manager)
-        const rolePermissionDocs = await RolePermission.find({ roleId: newMember.role._id })
-            .populate({ path: "permissionId", select: "permissionCode isActive" })
-            .lean();
-        const activePerms = rolePermissionDocs
-            .filter(rp => rp.permissionId && rp.permissionId.isActive)
-            .map(rp => rp.permissionId.permissionCode);
-        const isMemberPM = newMember.role.priority === 3 && ALL_PROJECT_PERMISSIONS.every(p => activePerms.includes(p));
 
         const newMemberRoleName = newMember.role.roleName.toLowerCase();
 
-        if (isMemberPM || ["project manager", "pm"].includes(newMemberRoleName)) {
-            project.projectManager = newMemberId;
-            project.projectManagerAddedBy = requestorId;
-        } else if (newMemberRoleName === "team lead") {
+        if (newMemberRoleName === "team lead") {
             if (!project.teamLeads.some(m => m.userId.toString() === newMemberId)) {
                 project.teamLeads.push({ userId: newMemberId, addedBy: requestorId });
             } else {
                 return res.status(400).json({ success: false, message: "Member already exists in Team Leads" });
-            }
-        } else if (newMemberRoleName.includes("developer") || newMemberRoleName === "software developer") {
-            if (!project.softwareDevelopers.some(m => m.userId.toString() === newMemberId)) {
-                project.softwareDevelopers.push({ userId: newMemberId, addedBy: requestorId });
-            } else {
-                return res.status(400).json({ success: false, message: "Member already exists in Software Developers" });
             }
         } else if (newMemberRoleName === "intern") {
             if (!project.interns.some(m => m.userId.toString() === newMemberId)) {
@@ -179,7 +187,7 @@ export const addProjectMember = async (req, res) => {
                 return res.status(400).json({ success: false, message: "Member already exists in Interns" });
             }
         } else {
-            // Default to software Developers array for other employee roles
+            // Default to software Developers array for developers and other member roles
             if (!project.softwareDevelopers.some(m => m.userId.toString() === newMemberId)) {
                 project.softwareDevelopers.push({ userId: newMemberId, addedBy: requestorId });
             } else {
@@ -266,23 +274,8 @@ export const updateProject = async (req, res) => {
         if (!project) return res.status(404).json({ success: false, message: "Project not found" });
 
         if (userId) {
-            const requestor = await User.findById(userId).populate("role");
-            const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
-            const requestorPriority = requestor?.role?.priority ?? req.user?.priority;
-
-            let canUpdate = false;
-            if (requestorPriority <= 2 || isOwnerOrAdminUser(req.user)) {
-                canUpdate = true;
-            } else if (
-                (isProjectManagerUser(req.user) || ["project manager", "pm"].includes(requestorRoleName) || requestorPriority === 3) &&
-                project.projectManager &&
-                project.projectManager.toString() === userId.toString()
-            ) {
-                canUpdate = true;
-            }
-
-            if (!canUpdate) {
-                return res.status(403).json({ success: false, message: "Only Owner or the Project Manager can update this project" });
+            if (!canPerformProjectAction(req, project, "project.update")) {
+                return res.status(403).json({ success: false, message: "Access denied. Only Owner/Admin or assigned Project Manager with 'project.update' permission can update this project." });
             }
         }
 
@@ -336,19 +329,11 @@ export const removeProjectMember = async (req, res) => {
         if (!project) return res.status(404).json({ success: false, message: "Project not found" });
 
         if (requestorId) {
-            const requestor = await User.findById(requestorId).populate("role");
-            const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
-            const requestorPriority = requestor?.role?.priority ?? req.user?.priority;
-
-            let isAuthorized = false;
-            const isOwnerOrAdmin = requestorPriority <= 2 || isOwnerOrAdminUser(req.user);
-
-            if (isOwnerOrAdmin) {
-                isAuthorized = true;
-            } else if (isProjectManagerUser(req.user) || ["project manager", "pm"].includes(requestorRoleName) || requestorPriority === 3) {
-                isAuthorized = true;
-            } else if (requestorRoleName === "team lead") {
-                if (["softwareDevelopers", "interns"].includes(memberRole)) {
+            let isAuthorized = canPerformProjectAction(req, project, "project.remove_member");
+            if (!isAuthorized) {
+                const requestorRoleName = req.user.roleName?.toLowerCase() || "";
+                const isTL = project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === requestorId);
+                if ((isTL || requestorRoleName === "team lead") && ["softwareDevelopers", "interns"].includes(memberRole)) {
                     isAuthorized = true;
                 }
             }
@@ -394,24 +379,8 @@ export const deleteProject = async (req, res) => {
         if (!project) return res.status(404).json({ success: false, message: "Project not found" });
 
         if (userId) {
-            const requestor = await User.findById(userId).populate("role");
-            const requestorRoleName = requestor?.role?.roleName?.toLowerCase() || "";
-            const requestorPriority = requestor?.role?.priority ?? req.user?.priority;
-            const isOwnerOrAdmin = requestorPriority <= 2 || isOwnerOrAdminUser(req.user);
-
-            let canDelete = false;
-            if (isOwnerOrAdmin) {
-                canDelete = true;
-            } else if (
-                (isProjectManagerUser(req.user) || ["project manager", "pm"].includes(requestorRoleName) || requestorPriority === 3) &&
-                project.projectManager &&
-                project.projectManager.toString() === userId.toString()
-            ) {
-                canDelete = true;
-            }
-
-            if (!canDelete) {
-                return res.status(403).json({ success: false, message: "Only Owner or the Project Manager can delete this project" });
+            if (!canPerformProjectAction(req, project, "project.delete")) {
+                return res.status(403).json({ success: false, message: "Access denied. Only Owner/Admin or assigned Project Manager with 'project.delete' permission can delete this project." });
             }
         }
 
