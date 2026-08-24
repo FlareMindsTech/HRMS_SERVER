@@ -1,21 +1,24 @@
 import Sprint from "../Modules/SprintModule.js";
 import Project from "../Modules/ProjectModule.js";
 import Task from "../Modules/TaskModule.js";
-import { isProjectManagerUser, isOwnerOrAdminUser } from "./ProjectController.js";
+import { isOwnerOrAdminUser } from "./ProjectController.js";
 
-// Helper: PM / TeamLead / Admin-Owner check
+// Helper: PM / Admin-Owner check
 const canManageSprint = (req, project) => {
-    if (!req.user) return true;
+    if (!req.user) return false;
     const userId = req.user.id ? req.user.id.toString() : null;
-    const requestorRoleName = req.user.roleName ? req.user.roleName.toLowerCase() : (req.user.role ? req.user.role.roleName?.toLowerCase() : "");
     const userPriority = req.user.priority ?? req.user.role?.priority;
 
     const isOwnerOrAdmin = userPriority <= 2 || isOwnerOrAdminUser(req.user);
-    const isPMCapable = isProjectManagerUser(req.user) || ["project manager", "pm"].includes(requestorRoleName) || userPriority === 3;
-    const isAssignedPM = project.projectManager && project.projectManager.toString() === userId;
-    const isTeamLead = project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId);
+    if (isOwnerOrAdmin) return true;
 
-    return isOwnerOrAdmin || isPMCapable || isAssignedPM || isTeamLead;
+    const isAssignedPM = project.projectManager && project.projectManager.toString() === userId;
+    if (isAssignedPM) {
+        const userPermissions = req.user.permissions || [];
+        return userPermissions.includes("*") || userPermissions.includes("project.update");
+    }
+
+    return false;
 };
 
 export const createSprint = async (req, res) => {

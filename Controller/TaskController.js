@@ -3,7 +3,7 @@ import Project from "../Modules/ProjectModule.js";
 import User from "../Modules/UserModule.js";
 import Notification from "../Modules/NotificationModule.js";
 import mongoose from "mongoose";
-import { isProjectManagerUser, isOwnerOrAdminUser } from "./ProjectController.js";
+import {  isOwnerOrAdminUser } from "./ProjectController.js";
 
 export const createTask = async (req, res) => {
     const session = await mongoose.startSession();
@@ -40,17 +40,17 @@ export const createTask = async (req, res) => {
         const userId = req.user ? req.user.id : null;
         if (userId) {
             const isOwner = isOwnerOrAdminUser(req.user);
-            let isManagerOrTL = false;
-            if (projectExists.projectManager && projectExists.projectManager.toString() === userId && isProjectManagerUser(req.user)) {
-                isManagerOrTL = true;
+            let isManager = false;
+            const isAssignedPM = projectExists.projectManager && projectExists.projectManager.toString() === userId;
+            const userPermissions = req.user.permissions || [];
+            const hasProjectUpdate = userPermissions.includes("*") || userPermissions.includes("project.update");
+            if (isAssignedPM && hasProjectUpdate) {
+                isManager = true;
             }
-            if (projectExists.teamLeads && projectExists.teamLeads.some(tl => tl.userId.toString() === userId)) {
-                isManagerOrTL = true;
-            }
-            if (!isOwner && !isManagerOrTL) {
+            if (!isOwner && !isManager) {
                 await session.abortTransaction();
                 session.endSession();
-                return res.status(403).json({ success: false, message: "Only Project Manager, Team Lead, or Owner/Admin can create tasks" });
+                return res.status(403).json({ success: false, message: "Only assigned Project Manager (with update permission) or Owner/Admin can create tasks" });
             }
         }
 
@@ -152,20 +152,20 @@ export const updateTaskStatus = async (req, res) => {
             const isAssignee = task.assignedTo && task.assignedTo.toString() === userId;
             const isOwner = isOwnerOrAdminUser(req.user);
 
-            let isManagerOrTL = false;
+            let isManager = false;
             if (task.projectId) {
                 const project = await Project.findById(task.projectId._id || task.projectId);
                 if (project) {
-                    if (project.projectManager && project.projectManager.toString() === userId && isProjectManagerUser(req.user)) {
-                        isManagerOrTL = true;
-                    }
-                    if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
-                        isManagerOrTL = true;
+                    const isAssignedPM = project.projectManager && project.projectManager.toString() === userId;
+                    const userPermissions = req.user.permissions || [];
+                    const hasProjectUpdate = userPermissions.includes("*") || userPermissions.includes("project.update");
+                    if (isAssignedPM && hasProjectUpdate) {
+                        isManager = true;
                     }
                 }
             }
 
-            if (!isAssignee && !isOwner && !isManagerOrTL) {
+            if (!isAssignee && !isOwner && !isManager) {
                 return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to update status for this task" });
             }
         }
@@ -227,20 +227,20 @@ export const reassignTask = async (req, res) => {
         const userId = req.user ? req.user.id : null;
         if (userId) {
             const isOwner = isOwnerOrAdminUser(req.user);
-            let isManagerOrTL = false;
+            let isManager = false;
             if (task.projectId) {
                 const project = await Project.findById(task.projectId);
                 if (project) {
-                    if (project.projectManager && project.projectManager.toString() === userId && isProjectManagerUser(req.user)) {
-                        isManagerOrTL = true;
-                    }
-                    if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
-                        isManagerOrTL = true;
+                    const isAssignedPM = project.projectManager && project.projectManager.toString() === userId;
+                    const userPermissions = req.user.permissions || [];
+                    const hasProjectUpdate = userPermissions.includes("*") || userPermissions.includes("project.update");
+                    if (isAssignedPM && hasProjectUpdate) {
+                        isManager = true;
                     }
                 }
             }
-            if (!isOwner && !isManagerOrTL) {
-                return res.status(403).json({ success: false, message: "Only Project Manager, Team Lead, or Owner/Admin can reassign tasks" });
+            if (!isOwner && !isManager) {
+                return res.status(403).json({ success: false, message: "Only assigned Project Manager (with update permission) or Owner/Admin can reassign tasks" });
             }
         }
 
@@ -337,21 +337,21 @@ export const updateTask = async (req, res) => {
         if (userId) {
             const isOwner = isOwnerOrAdminUser(req.user);
 
-            let isManagerOrTL = false;
+            let isManager = false;
             if (task.projectId) {
                 const project = await Project.findById(task.projectId._id || task.projectId);
                 if (project) {
-                    if (project.projectManager && project.projectManager.toString() === userId && isProjectManagerUser(req.user)) {
-                        isManagerOrTL = true;
-                    }
-                    if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
-                        isManagerOrTL = true;
+                    const isAssignedPM = project.projectManager && project.projectManager.toString() === userId;
+                    const userPermissions = req.user.permissions || [];
+                    const hasProjectUpdate = userPermissions.includes("*") || userPermissions.includes("project.update");
+                    if (isAssignedPM && hasProjectUpdate) {
+                        isManager = true;
                     }
                 }
             }
 
-            if (!isOwner && !isManagerOrTL) {
-                return res.status(403).json({ success: false, message: "Secure Rule Violation: Only Project Manager, Team Lead, or Owner/Admin can edit task details" });
+            if (!isOwner && !isManager) {
+                return res.status(403).json({ success: false, message: "Secure Rule Violation: Only assigned Project Manager (with update permission) or Owner/Admin can edit task details" });
             }
         }
 
@@ -391,23 +391,23 @@ export const deleteTask = async (req, res) => {
         if (!task) return res.status(404).json({ success: false, message: "Task not found" });
 
         if (userId) {
-            const isOwner = req.user.priority <= 2 || req.user.isOwner;
+            const isOwner = isOwnerOrAdminUser(req.user);
 
-            let isManagerOrTL = false;
+            let isManager = false;
             if (task.projectId) {
                 const project = await Project.findById(task.projectId._id || task.projectId);
                 if (project) {
-                    if (project.projectManager && project.projectManager.toString() === userId) {
-                        isManagerOrTL = true;
-                    }
-                    if (project.teamLeads && project.teamLeads.some(tl => tl.userId.toString() === userId)) {
-                        isManagerOrTL = true;
+                    const isAssignedPM = project.projectManager && project.projectManager.toString() === userId;
+                    const userPermissions = req.user.permissions || [];
+                    const hasProjectUpdate = userPermissions.includes("*") || userPermissions.includes("project.update");
+                    if (isAssignedPM && hasProjectUpdate) {
+                        isManager = true;
                     }
                 }
             }
 
-            if (!isOwner && !isManagerOrTL) {
-                return res.status(403).json({ success: false, message: "Secure Rule Violation: You do not have permission to delete this task" });
+            if (!isOwner && !isManager) {
+                return res.status(403).json({ success: false, message: "Secure Rule Violation: Only assigned Project Manager (with update permission) or Owner/Admin can delete this task" });
             }
         }
 

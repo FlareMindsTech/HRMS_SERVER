@@ -5,7 +5,8 @@ import {
     getAllDailyReports,
     getDailyReportsByProject,
     getDailyReportById,
-    deleteDailyReport
+    deleteDailyReport,
+    addCommentToDailyReport
 } from "../Controller/DailyReportController.js";
 import { Authentication } from "../Middleware/Auth.js";
 
@@ -18,6 +19,7 @@ router.get("/my-reports", getMyDailyReports);
 router.get("/project/:projectId", getDailyReportsByProject);
 router.get("/all", getAllDailyReports);
 router.get("/:id", getDailyReportById);
+router.post("/:id/comment", addCommentToDailyReport);
 router.delete("/:id", deleteDailyReport);
 
 export default router;
