@@ -1,5 +1,6 @@
 import Attendance from '../Modules/AttendanceModule.js';
 import User from '../Modules/UserModule.js';
+import Leave from '../Modules/LeaveModule.js';
 
 // Helper to calculate total working minutes
 const calculateMinutes = (loginTime, logoutTime) => {
@@ -366,6 +367,21 @@ export const getAttendanceByMonth = async (req, res) => {
             date: { $gte: startDateString, $lte: endDateString }
         }).sort({ date: 1 });
 
+        // Query approved leaves for the target user in this date range
+        const startBoundary = new Date(`${startDateString}T00:00:00.000Z`);
+        const endBoundary = new Date(`${endDateString}T23:59:59.999Z`);
+        const approvedLeaves = await Leave.find({
+            employeeId: targetUserId,
+            status: "Approved",
+            startDate: { $gte: startBoundary, $lte: endBoundary }
+        }).lean();
+
+        const leaveMap = {};
+        approvedLeaves.forEach((l) => {
+            const dStr = new Date(l.startDate).toISOString().split("T")[0];
+            leaveMap[dStr] = l;
+        });
+
         const attendanceMap = {};
         attendance.forEach(a => {
             attendanceMap[a.date] = a.toObject();
@@ -380,6 +396,16 @@ export const getAttendanceByMonth = async (req, res) => {
 
             if (attendanceMap[dateStr]) {
                 finalResult.push(attendanceMap[dateStr]);
+            } else if (leaveMap[dateStr]) {
+                const leaveRecord = leaveMap[dateStr];
+                finalResult.push({
+                    userId: targetUserId,
+                    date: dateStr,
+                    status: leaveRecord.isHalfDay ? "Half Day Leave" : "Leave",
+                    leaveType: leaveRecord.leaveType,
+                    halfDayPeriod: leaveRecord.halfDayPeriod || null,
+                    isGenerated: true
+                });
             } else {
                 const dayOfWeek = currentLoopDate.getUTCDay(); // 0=Sun, 6=Sat
                 const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);

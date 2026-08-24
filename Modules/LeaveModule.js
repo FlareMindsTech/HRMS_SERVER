@@ -47,6 +47,12 @@ const LeaveSchema = new Schema(
             default: false
         },
 
+        halfDayPeriod: {
+            type: String,
+            enum: ["Morning", "Afternoon", null],
+            default: null
+        },
+
         title: {
             type: String,
             default: "Leave Application",
@@ -78,6 +84,11 @@ const LeaveSchema = new Schema(
             type: Date
         },
 
+        rejectionReason: {
+            type: String,
+            default: null
+        },
+
         balanceBefore: {
             type: Number
         },
@@ -85,6 +96,18 @@ const LeaveSchema = new Schema(
         balanceAfter: {
             type: Number
         },
+
+        auditTrail: [
+            {
+                action: { type: String, required: true },
+                oldStatus: { type: String, default: null },
+                newStatus: { type: String, required: true },
+                performedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+                performedByName: { type: String },
+                reason: { type: String, default: null },
+                performedAt: { type: Date, default: Date.now }
+            }
+        ],
 
         appliedOn: {
             type: Date,

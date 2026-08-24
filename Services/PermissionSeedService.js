@@ -199,7 +199,7 @@ export const STANDARD_PERMISSIONS = [
     description: "Activate, deactivate, or block employee login accounts",
   },
 
-  // ── LEAVE MANAGEMENT (Future Module) ──
+  // ── LEAVE MANAGEMENT MODULE ──
   {
     permissionName: "Read Own Leaves",
     permissionCode: "leave.read.own",
@@ -207,10 +207,10 @@ export const STANDARD_PERMISSIONS = [
     description: "View personal leave applications and balance",
   },
   {
-    permissionName: "Read All Leaves",
-    permissionCode: "leave.read.all",
+    permissionName: "Create Own Leave",
+    permissionCode: "leave.create.own",
     module: "LEAVE_MGMT",
-    description: "View company-wide leave requests and team calendar",
+    description: "Submit personal leave requests for review",
   },
   {
     permissionName: "Apply Leave",
@@ -219,16 +219,52 @@ export const STANDARD_PERMISSIONS = [
     description: "Submit leave requests for review",
   },
   {
+    permissionName: "Cancel Own Leave",
+    permissionCode: "leave.cancel.own",
+    module: "LEAVE_MGMT",
+    description: "Cancel own pending leave requests",
+  },
+  {
     permissionName: "Cancel Leave",
     permissionCode: "leave.cancel",
     module: "LEAVE_MGMT",
     description: "Cancel own pending leave requests",
   },
   {
+    permissionName: "Read Team Leaves",
+    permissionCode: "leave.read.team",
+    module: "LEAVE_MGMT",
+    description: "View leave requests for team members and direct reports",
+  },
+  {
+    permissionName: "Read All Leaves",
+    permissionCode: "leave.read.all",
+    module: "LEAVE_MGMT",
+    description: "View company-wide leave requests and team calendar",
+  },
+  {
     permissionName: "Approve Leave",
     permissionCode: "leave.approve",
     module: "LEAVE_MGMT",
-    description: "Approve or reject employee leave applications",
+    description: "Approve employee leave applications",
+  },
+  {
+    permissionName: "Reject Leave",
+    permissionCode: "leave.reject",
+    module: "LEAVE_MGMT",
+    description: "Reject employee leave applications",
+  },
+  {
+    permissionName: "Manage Leaves",
+    permissionCode: "leave.manage",
+    module: "LEAVE_MGMT",
+    description: "Administrative leave management and escalation",
+  },
+  {
+    permissionName: "View Leave Audit",
+    permissionCode: "leave.audit",
+    module: "LEAVE_MGMT",
+    description: "View leave workflow status audit history",
   },
 
   // ── ASSET MANAGEMENT MODULE ──
@@ -391,6 +427,14 @@ export const seedRBACFoundation = async () => {
       "asset.create",
       "asset.assign",
       "asset.return",
+      "leave.read.own",
+      "leave.create.own",
+      "leave.apply",
+      "leave.cancel.own",
+      "leave.cancel",
+      "leave.read.team",
+      "leave.approve",
+      "leave.reject",
     ];
 
     const existingHrRoles = await Role.find({
@@ -452,8 +496,8 @@ export const seedRBACFoundation = async () => {
       }
     }
 
-    // HR gets DASHBOARD, ATTENDANCE, USER_MANAGEMENT, ASSETS
-    const hrMenuCodes = ["DASHBOARD", "ATTENDANCE", "USER_MANAGEMENT", "ASSETS"];
+    // HR gets DASHBOARD, ATTENDANCE, USER_MANAGEMENT, ASSETS, LEAVE_MGMT
+    const hrMenuCodes = ["DASHBOARD", "ATTENDANCE", "USER_MANAGEMENT", "ASSETS", "LEAVE_MGMT"];
     const hrMenus = seededMenus.filter((m) => hrMenuCodes.includes(m.menuCode));
     if (hrRole) {
       // Remove any unwanted menus from HR
@@ -554,7 +598,9 @@ export const seedRBACFoundation = async () => {
       "project.read",
       "user.read_own",
       "leave.read.own",
+      "leave.create.own",
       "leave.apply",
+      "leave.cancel.own",
       "leave.cancel",
     ];
     const employeePermDocs = seededPermissions.filter((p) =>
@@ -578,7 +624,9 @@ export const seedRBACFoundation = async () => {
       "attendance.punch_out",
       "user.read_own",
       "leave.read.own",
+      "leave.create.own",
       "leave.apply",
+      "leave.cancel.own",
       "leave.cancel",
       "project.read",
       "project.create",
