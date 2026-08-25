@@ -8,24 +8,29 @@ const addressSchema = new mongoose.Schema(
       required: [true]
     },
 
+    addressType: {
+      type: String,
+      enum: ["Permanent", "Current / Present", "Official", "Current", "Present"],
+      default: "Permanent",
+      trim: true
+    },
+
     address1: {
       type: String,
       required: [true],
       trim: true,
-      minlength: [5]
+      minlength: [3]
     },
 
     address2: {
       type: String,
-      trim: true,
-      minlength: [3]
+      trim: true
     },
 
     city: {
       type: String,
       required: [true, "City is required"],
-      trim: true,
-      match: [/^[a-zA-Z ]+$/]
+      trim: true
     },
 
     state: {
@@ -40,11 +45,11 @@ const addressSchema = new mongoose.Schema(
       default: "India"
     },
 
-   postalCode: {
-  type: String,
-  required: [true],
-  match: [/^[0-9]{6}$/]
-}
+    pincode: {
+      type: String,
+      required: [true],
+      match: [/^[0-9]{6}$/]
+    }
   },
   {
     timestamps: true
