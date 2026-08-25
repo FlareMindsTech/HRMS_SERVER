@@ -74,6 +74,27 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Profile Picture / Avatar (Cloudinary URL)
+    avatarUrl: {
+      type: String,
+      default: "",
+    },
+
+    profilePic: {
+      type: String,
+      default: "",
+    },
+
+    profilePicUrl: {
+      type: String,
+      default: "",
+    },
+
+    profileImage: {
+      type: String,
+      default: "",
+    },
+
     // =========================
     // AUTHENTICATION
     // =========================
@@ -228,6 +249,7 @@ const userSchema = new mongoose.Schema(
     bankDetails: {
       accountNumber: { type: String, trim: true },
       ifscCode: { type: String, trim: true },
+      ifsc: { type: String, trim: true },
       bankName: { type: String, trim: true },
       branchName: { type: String, trim: true },
     },

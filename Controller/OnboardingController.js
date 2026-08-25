@@ -1,178 +1,121 @@
+import mongoose from "mongoose";
 import Onboarding from "../Modules/OnboardingModule.js";
 import User from "../Modules/UserModule.js";
-import Role from "../Modules/RoleModules.js";
-import bcrypt from "bcrypt";
-import { logAudit } from "../Utils/AuditLogger.js";
+import DocumentSystem from "../Modules/DocumentSystemModule.js";
+import DocumentRequirement from "../Modules/DocumentRequirementModule.js";
 import { getPagination, formatPaginatedResponse } from "../Utils/Pagination.js";
-import { canAssignRole } from "../Utils/RoleAuthority.js";
+import { logAudit } from "../Utils/AuditLogger.js";
+import {
+  initiateOnboardingService,
+  getOnboardingDetailsService,
+  updateEmployeeInfoService,
+  updateEmploymentService,
+  updatePayrollDetailsService,
+  addTaskService,
+  updateTaskService,
+  deleteTaskService,
+  assignAssetService,
+  unassignAssetService,
+  addSystemAccessService,
+  updateSystemAccessService,
+  addOrientationService,
+  updateOrientationService,
+  addAgreementService,
+  acknowledgeAgreementService,
+  runValidationService,
+  completeOnboardingService,
+  activateEmployeeService,
+  provisionAccountService,
+  toggleLoginAccessService,
+  maskSensitiveString,
+} from "../Services/OnboardingService.js";
+import { validateOnboarding } from "../Services/OnboardingValidationService.js";
 
-// Helper to generate next unique Employee Code EMP0001
-const generateNextEmployeeCode = async () => {
-  const lastUser = await User.findOne({ employeeCode: { $regex: /^EMP/ } })
-    .sort({ createdAt: -1 })
-    .select("employeeCode")
-    .lean();
-
-  if (!lastUser || !lastUser.employeeCode) {
-    return "EMP0001";
+// Helper for error formatting
+const handleError = (res, error, defaultMessage = "Operation failed") => {
+  console.error("OnboardingController Error:", error);
+  if (error.code === 11000) {
+    const field = Object.keys(error.keyPattern || {})[0] || "field";
+    const value = error.keyValue ? error.keyValue[field] : "";
+    return res.status(409).json({
+      success: false,
+      message: `A record with this ${field} ('${value}') already exists.`,
+    });
   }
-
-  const numPart = parseInt(lastUser.employeeCode.replace(/\D/g, ""), 10);
-  const nextNum = isNaN(numPart) ? 1 : numPart + 1;
-  return `EMP${String(nextNum).padStart(4, "0")}`;
+  const status = error.statusCode || 500;
+  return res.status(status).json({
+    success: false,
+    message: error.message || defaultMessage,
+    missingRequirements: error.missingRequirements || undefined,
+    sections: error.sections || undefined,
+  });
 };
 
-// 1. Initiate Employee Onboarding & Create User Record
+// =========================================================================
+// 1. INITIATE ONBOARDING
+// =========================================================================
 export const initiateOnboarding = async (req, res) => {
   try {
-    const {
-      firstName,
-      middleName,
-      lastName,
-      email,
-      password,
-      dob,
-      gender,
-      marriageStatus,
-      mobileNo,
-      roleId,
-      department,
-      designation,
-      reportingManager,
-      joiningDate,
-      employmentType,
-      bankDetails,
-      statutoryDetails,
-      emergencyContact,
-      tasks,
-    } = req.body;
-
-    if (!firstName || !lastName || !email || !mobileNo || !dob || !gender || !marriageStatus || !roleId) {
-      return res.status(400).json({
-        success: false,
-        message: "First name, last name, email, mobile number, DOB, gender, marriage status, and role ID are required.",
-      });
-    }
-
-    const existingUser = await User.findOne({ $or: [{ email: email.toLowerCase() }, { mobileNo }] });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: "An employee with this email or mobile number already exists.",
-      });
-    }
-
-    let role;
-    if (roleId) {
-      role = await Role.findById(roleId);
-      if (!role) {
-        return res.status(404).json({ success: false, message: "Specified Role ID not found." });
-      }
-      if (!canAssignRole(req.user, role)) {
-        return res.status(403).json({
-          success: false,
-          message: `Forbidden: You do not have authority to assign role '${role.roleName}'.`,
-        });
-      }
-    } else {
-      role = await Role.findOne({ roleCode: "EMPLOYEE" });
-    }
-
-    const employeeCode = await generateNextEmployeeCode();
-    const rawPassword = password || "Welcome@123";
-    const hashedPassword = await bcrypt.hash(rawPassword, 10);
-
-    // Create User with ONBOARDING status and hasLoginAccess = false by default
-    const newUser = await User.create({
-      firstName,
-      middleName,
-      lastName,
-      email: email.toLowerCase().trim(),
-      password: hashedPassword,
-      dob: new Date(dob),
-      gender,
-      marriageStatus,
-      mobileNo: mobileNo.trim(),
-      employeeCode,
-      role: role ? role._id : null,
-      reportingManager: reportingManager || null,
-      tlCode: reportingManager || null,
-      department: department || "General",
-      designation: designation || "Employee",
-      joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
-      employmentType: employmentType || "FULL_TIME",
-      lifecycleStatus: "ONBOARDING",
-      hasLoginAccess: false,
-      bankDetails: bankDetails || {},
-      statutoryDetails: statutoryDetails || {},
-      emergencyContact: emergencyContact || {},
-    });
-
-    const defaultTasks = [
-      { taskName: "Verify Government Identity Proofs (PAN/Aadhaar)", category: "HR_DOCUMENT" },
-      { taskName: "Collect Signed Employment Contract & Offer Letter", category: "HR_DOCUMENT" },
-      { taskName: "Create Corporate Email & Slack Accounts", category: "IT_PROVISIONING" },
-      { taskName: "Issue Laptop & IT Accessories", category: "ASSET_ALLOCATION" },
-      { taskName: "Schedule Orientation & Department Intro", category: "TRAINING" },
-    ];
-
-    const onboardingRecord = await Onboarding.create({
-      employeeId: newUser._id,
-      status: "PENDING",
-      startDate: new Date(),
-      tasks: tasks && Array.isArray(tasks) && tasks.length > 0 ? tasks : defaultTasks,
-      provisionedAccess: [
-        { systemName: "Email Account", isProvisioned: false },
-        { systemName: "HRMS Portal", isProvisioned: true, provisionedAt: new Date() },
-        { systemName: "Code Repository / Tools", isProvisioned: false },
-      ],
-      createdBy: req.user.id,
-    });
-
-    await logAudit({
-      req,
-      action: "INITIATE_ONBOARDING",
-      module: "ONBOARDING",
-      resourceId: onboardingRecord._id.toString(),
-      newState: { user: newUser.toObject(), onboarding: onboardingRecord.toObject() },
-      details: `Initiated onboarding for employee ${employeeCode} (${email})`,
-    });
-
+    const result = await initiateOnboardingService({ req, body: req.body });
     return res.status(201).json({
       success: true,
       message: "Employee onboarding initiated successfully.",
       data: {
         user: {
-          _id: newUser._id,
-          employeeCode: newUser.employeeCode,
-          firstName: newUser.firstName,
-          lastName: newUser.lastName,
-          email: newUser.email,
-          lifecycleStatus: newUser.lifecycleStatus,
+          _id: result.user._id,
+          employeeCode: result.user.employeeCode,
+          firstName: result.user.firstName,
+          lastName: result.user.lastName,
+          email: result.user.email,
+          lifecycleStatus: result.user.lifecycleStatus,
+          hasLoginAccess: result.user.hasLoginAccess,
         },
-        onboarding: onboardingRecord,
+        onboarding: result.onboarding,
       },
     });
   } catch (error) {
-    console.error("initiateOnboarding Error:", error);
-    return res.status(500).json({ success: false, message: error.message });
+    return handleError(res, error, "Failed to initiate onboarding");
   }
 };
 
-// 2. Get All Onboarding Records
+// =========================================================================
+// 2. GET ALL ONBOARDINGS (PAGINATED & FILTERED)
+// =========================================================================
 export const getAllOnboardings = async (req, res) => {
   try {
     const { page, limit, skip, sort } = getPagination(req.query);
-    const { status, search } = req.query;
+    const { status, search, department } = req.query;
 
     const query = {};
     if (status) query.status = status;
 
+    let userMatch = {};
+    if (department) userMatch.department = department;
+    if (search) {
+      userMatch.$or = [
+        { firstName: { $regex: search, $options: "i" } },
+        { lastName: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { employeeCode: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    let matchedUserIds = null;
+    if (Object.keys(userMatch).length > 0) {
+      const users = await User.find(userMatch).select("_id").lean();
+      matchedUserIds = users.map((u) => u._id);
+      query.employeeId = { $in: matchedUserIds };
+    }
+
     const list = await Onboarding.find(query)
       .populate({
         path: "employeeId",
-        select: "firstName lastName email employeeCode department designation joiningDate mobileNo",
+        select:
+          "firstName middleName lastName email employeeCode department designation joiningDate mobileNo lifecycleStatus hasLoginAccess",
+        populate: { path: "role", select: "roleName roleCode priority" },
       })
+      .populate("assignedAssets", "assetCode name category status")
+      .populate("createdBy", "firstName lastName email employeeCode")
       .sort(sort)
       .skip(skip)
       .limit(limit)
@@ -180,108 +123,577 @@ export const getAllOnboardings = async (req, res) => {
 
     const total = await Onboarding.countDocuments(query);
 
-    return res.status(200).json(formatPaginatedResponse({ data: list, total, page, limit }));
+    return res.status(200).json(
+      formatPaginatedResponse({
+        data: list,
+        total,
+        page,
+        limit,
+      })
+    );
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleError(res, error, "Failed to fetch onboarding records");
   }
 };
 
-// 3. Update Onboarding Task Status
-export const updateOnboardingTask = async (req, res) => {
+// =========================================================================
+// 3. GET ONBOARDING BY ID
+// =========================================================================
+export const getOnboardingById = async (req, res) => {
   try {
-    const { onboardingId, taskId } = req.params;
-    const { isCompleted, notes } = req.body;
+    const { id } = req.params;
+    const data = await getOnboardingDetailsService(id);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch onboarding details");
+  }
+};
 
-    const record = await Onboarding.findById(onboardingId);
-    if (!record) {
+// =========================================================================
+// 4. GET ONBOARDING BY EMPLOYEE ID
+// =========================================================================
+export const getOnboardingByEmployeeId = async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const data = await getOnboardingDetailsService(employeeId);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch onboarding details by employee ID");
+  }
+};
+
+// =========================================================================
+// 5. UPDATE EMPLOYEE INFO
+// =========================================================================
+export const updateEmployeeInfo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await updateEmployeeInfoService({ req, onboardingId: id, body: req.body });
+    return res.status(200).json({
+      success: true,
+      message: "Employee onboarding information updated successfully.",
+      data: result,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to update employee information");
+  }
+};
+
+// =========================================================================
+// 6. UPDATE EMPLOYMENT DETAILS
+// =========================================================================
+export const updateEmployment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await updateEmploymentService({ req, onboardingId: id, body: req.body });
+    return res.status(200).json({
+      success: true,
+      message: "Employment parameters updated successfully.",
+      data: result,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to update employment details");
+  }
+};
+
+// =========================================================================
+// 7. UPDATE PAYROLL & STATUTORY
+// =========================================================================
+export const updatePayroll = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await updatePayrollDetailsService({ req, onboardingId: id, body: req.body });
+    return res.status(200).json({
+      success: true,
+      message: "Payroll and statutory onboarding details updated successfully.",
+      data: {
+        payrollReadiness: result.onboarding.payrollReadiness,
+        bankDetails: {
+          accountNumber: maskSensitiveString(result.user.bankDetails?.accountNumber),
+          bankName: result.user.bankDetails?.bankName,
+          ifscCode: result.user.bankDetails?.ifscCode,
+          branchName: result.user.bankDetails?.branchName,
+        },
+        statutoryDetails: {
+          panNo: maskSensitiveString(result.user.statutoryDetails?.panNo),
+          aadhaarNo: maskSensitiveString(result.user.statutoryDetails?.aadhaarNo),
+          pfUan: result.user.statutoryDetails?.pfUan,
+          esiNo: result.user.statutoryDetails?.esiNo,
+        },
+      },
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to update payroll details");
+  }
+};
+
+// =========================================================================
+// 8. ONBOARDING DOCUMENTS MANAGEMENT
+// =========================================================================
+export const getOnboardingDocuments = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await Onboarding.findById(id);
+    if (!onboarding) {
       return res.status(404).json({ success: false, message: "Onboarding record not found." });
     }
 
-    const task = record.tasks.id(taskId);
-    if (!task) {
-      return res.status(404).json({ success: false, message: "Task not found." });
+    const requirements = await DocumentRequirement.find({ module: "ONBOARDING", isActive: true }).lean();
+    const uploadedDocs = await DocumentSystem.find({
+      employeeId: onboarding.employeeId,
+      module: "ONBOARDING",
+      isActive: true,
+    })
+      .populate("uploadedBy", "firstName lastName email")
+      .populate("verifiedBy", "firstName lastName email")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        requirements,
+        uploadedDocuments: uploadedDocs,
+      },
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch onboarding documents");
+  }
+};
+
+export const verifyOnboardingDocument = async (req, res) => {
+  try {
+    const { id, documentId } = req.params;
+    const doc = await DocumentSystem.findById(documentId);
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Document not found." });
     }
 
-    task.isCompleted = isCompleted !== undefined ? isCompleted : task.isCompleted;
-    if (task.isCompleted) {
-      task.completedAt = new Date();
-    }
-    if (notes) task.notes = notes;
-
-    // Recalculate status
-    const totalTasks = record.tasks.length;
-    const completedTasks = record.tasks.filter((t) => t.isCompleted).length;
-
-    if (completedTasks === 0) {
-      record.status = "PENDING";
-    } else if (completedTasks < totalTasks) {
-      record.status = "IN_PROGRESS";
-    } else {
-      record.status = "COMPLETED";
-      record.completedDate = new Date();
-
-      // Automatically transition Employee lifecycle status to ACTIVE
-      await User.findByIdAndUpdate(record.employeeId, { lifecycleStatus: "ACTIVE" });
-    }
-
-    await record.save();
+    doc.verificationStatus = "VERIFIED";
+    doc.verifiedBy = req.user.id;
+    doc.verifiedAt = new Date();
+    doc.rejectionReason = null;
+    await doc.save();
 
     await logAudit({
       req,
-      action: "UPDATE_ONBOARDING_TASK",
+      action: "DOCUMENT_VERIFIED",
       module: "ONBOARDING",
-      resourceId: record._id.toString(),
-      newState: record.toObject(),
-      details: `Updated onboarding task ${task.taskName} to completed=${task.isCompleted}`,
+      resourceId: doc._id.toString(),
+      newState: doc.toObject(),
+      details: `Verified onboarding document '${doc.documentType}' for employee ${doc.employeeId}`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Document '${doc.documentType}' verified successfully.`,
+      data: doc,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to verify document");
+  }
+};
+
+export const rejectOnboardingDocument = async (req, res) => {
+  try {
+    const { id, documentId } = req.params;
+    const { rejectionReason } = req.body;
+
+    if (!rejectionReason?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "A rejection reason is mandatory when rejecting an onboarding document.",
+      });
+    }
+
+    const doc = await DocumentSystem.findById(documentId);
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Document not found." });
+    }
+
+    doc.verificationStatus = "REJECTED";
+    doc.verifiedBy = req.user.id;
+    doc.verifiedAt = new Date();
+    doc.rejectionReason = rejectionReason.trim();
+    await doc.save();
+
+    await logAudit({
+      req,
+      action: "DOCUMENT_REJECTED",
+      module: "ONBOARDING",
+      resourceId: doc._id.toString(),
+      newState: doc.toObject(),
+      details: `Rejected document '${doc.documentType}' for employee ${doc.employeeId}: ${rejectionReason}`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Document '${doc.documentType}' marked as REJECTED.`,
+      data: doc,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to reject document");
+  }
+};
+
+// =========================================================================
+// 9. ONBOARDING TASKS MANAGEMENT
+// =========================================================================
+export const getOnboardingTasks = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await Onboarding.findById(id).populate("tasks.assignedTo", "firstName lastName email");
+    if (!onboarding) {
+      return res.status(404).json({ success: false, message: "Onboarding record not found." });
+    }
+    return res.status(200).json({ success: true, data: onboarding.tasks });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch onboarding tasks");
+  }
+};
+
+export const addOnboardingTask = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await addTaskService({ req, onboardingId: id, body: req.body });
+    return res.status(201).json({
+      success: true,
+      message: "Onboarding task added successfully.",
+      data: onboarding.tasks,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to add onboarding task");
+  }
+};
+
+export const updateOnboardingTask = async (req, res) => {
+  try {
+    const onboardingId = req.params.id || req.params.onboardingId;
+    const taskId = req.params.taskId;
+
+    const onboarding = await updateTaskService({
+      req,
+      onboardingId,
+      taskId,
+      body: req.body,
     });
 
     return res.status(200).json({
       success: true,
       message: "Onboarding task updated successfully.",
-      data: record,
+      data: onboarding,
     });
   } catch (error) {
-    console.error("updateOnboardingTask Error:", error);
-    return res.status(500).json({ success: false, message: error.message });
+    return handleError(res, error, "Failed to update onboarding task");
   }
 };
 
-// 4. Complete Onboarding & Activate Employee
+export const deleteOnboardingTask = async (req, res) => {
+  try {
+    const onboardingId = req.params.id || req.params.onboardingId;
+    const taskId = req.params.taskId;
+    const onboarding = await deleteTaskService({ req, onboardingId, taskId });
+    return res.status(200).json({
+      success: true,
+      message: "Onboarding task deleted successfully.",
+      data: onboarding.tasks,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to delete onboarding task");
+  }
+};
+
+// =========================================================================
+// 10. ASSET ALLOCATION
+// =========================================================================
+export const getOnboardingAssets = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await Onboarding.findById(id).populate("assignedAssets");
+    if (!onboarding) {
+      return res.status(404).json({ success: false, message: "Onboarding record not found." });
+    }
+    return res.status(200).json({ success: true, data: onboarding.assignedAssets });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch onboarding assets");
+  }
+};
+
+export const assignOnboardingAsset = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await assignAssetService({ req, onboardingId: id, body: req.body });
+    return res.status(200).json({
+      success: true,
+      message: "Asset assigned to employee onboarding successfully.",
+      data: onboarding.assignedAssets,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to assign asset");
+  }
+};
+
+export const unassignOnboardingAsset = async (req, res) => {
+  try {
+    const { id, assetId } = req.params;
+    const onboarding = await unassignAssetService({ req, onboardingId: id, assetId, body: req.body });
+    return res.status(200).json({
+      success: true,
+      message: "Asset unassigned successfully.",
+      data: onboarding.assignedAssets,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to unassign asset");
+  }
+};
+
+// =========================================================================
+// 11. SYSTEM ACCESS
+// =========================================================================
+export const getOnboardingAccess = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await Onboarding.findById(id).populate("provisionedAccess.provisionedBy", "firstName lastName email");
+    if (!onboarding) {
+      return res.status(404).json({ success: false, message: "Onboarding record not found." });
+    }
+    return res.status(200).json({ success: true, data: onboarding.provisionedAccess });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch system access records");
+  }
+};
+
+export const addOnboardingAccess = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await addSystemAccessService({ req, onboardingId: id, body: req.body });
+    return res.status(201).json({
+      success: true,
+      message: "System access record added successfully.",
+      data: onboarding.provisionedAccess,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to add system access");
+  }
+};
+
+export const updateOnboardingAccess = async (req, res) => {
+  try {
+    const { id, accessId } = req.params;
+    const onboarding = await updateSystemAccessService({ req, onboardingId: id, accessId, body: req.body });
+    return res.status(200).json({
+      success: true,
+      message: "System access record updated successfully.",
+      data: onboarding.provisionedAccess,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to update system access");
+  }
+};
+
+// =========================================================================
+// 12. ORIENTATION & TRAINING
+// =========================================================================
+export const getOnboardingTraining = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await Onboarding.findById(id);
+    if (!onboarding) {
+      return res.status(404).json({ success: false, message: "Onboarding record not found." });
+    }
+    return res.status(200).json({ success: true, data: onboarding.orientations });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch training records");
+  }
+};
+
+export const addOnboardingTraining = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await addOrientationService({ req, onboardingId: id, body: req.body });
+    return res.status(201).json({
+      success: true,
+      message: "Orientation / training added successfully.",
+      data: onboarding.orientations,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to add training");
+  }
+};
+
+export const updateOnboardingTraining = async (req, res) => {
+  try {
+    const { id, trainingId } = req.params;
+    const onboarding = await updateOrientationService({ req, onboardingId: id, trainingId, body: req.body });
+    return res.status(200).json({
+      success: true,
+      message: "Orientation / training updated successfully.",
+      data: onboarding.orientations,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to update training");
+  }
+};
+
+// =========================================================================
+// 13. AGREEMENTS & POLICIES
+// =========================================================================
+export const getOnboardingAgreements = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await Onboarding.findById(id);
+    if (!onboarding) {
+      return res.status(404).json({ success: false, message: "Onboarding record not found." });
+    }
+    return res.status(200).json({ success: true, data: onboarding.agreements });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch agreements");
+  }
+};
+
+export const addOnboardingAgreement = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const onboarding = await addAgreementService({ req, onboardingId: id, body: req.body });
+    return res.status(201).json({
+      success: true,
+      message: "Agreement/policy added successfully.",
+      data: onboarding.agreements,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to add agreement");
+  }
+};
+
+export const acknowledgeOnboardingAgreement = async (req, res) => {
+  try {
+    const { id, agreementId } = req.params;
+    const onboarding = await acknowledgeAgreementService({
+      req,
+      onboardingId: id,
+      agreementId,
+      body: req.body,
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Agreement acknowledgement recorded successfully.",
+      data: onboarding.agreements,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to acknowledge agreement");
+  }
+};
+
+// =========================================================================
+// 14. VALIDATION ENGINE ENDPOINTS
+// =========================================================================
+export const getOnboardingValidation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const report = await validateOnboarding(id);
+    return res.status(200).json({
+      success: true,
+      valid: report.valid,
+      sections: report.sections,
+      missingRequirements: report.missingRequirements,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to fetch validation status");
+  }
+};
+
+export const validateOnboardingEndpoint = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await runValidationService({ req, onboardingId: id });
+    const statusCode = result.valid ? 200 : 422;
+    return res.status(statusCode).json({
+      success: result.valid,
+      message: result.valid
+        ? "Onboarding validation passed successfully."
+        : "Onboarding validation failed with outstanding requirements.",
+      data: result,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to run validation engine");
+  }
+};
+
+// =========================================================================
+// 15. ONBOARDING COMPLETION
+// =========================================================================
 export const completeOnboarding = async (req, res) => {
   try {
     const { id } = req.params;
-
-    const record = await Onboarding.findById(id);
-    if (!record) {
-      return res.status(404).json({ success: false, message: "Onboarding record not found." });
-    }
-
-    record.status = "COMPLETED";
-    record.completedDate = new Date();
-    record.tasks.forEach((t) => {
-      t.isCompleted = true;
-      t.completedAt = t.completedAt || new Date();
-    });
-
-    await record.save();
-
-    // Set User lifecycleStatus to ACTIVE
-    await User.findByIdAndUpdate(record.employeeId, { lifecycleStatus: "ACTIVE" });
-
-    await logAudit({
-      req,
-      action: "COMPLETE_ONBOARDING",
-      module: "ONBOARDING",
-      resourceId: record._id.toString(),
-      details: `Completed onboarding for employee ${record.employeeId}`,
-    });
-
+    const result = await completeOnboardingService({ req, onboardingId: id });
     return res.status(200).json({
       success: true,
-      message: "Employee onboarding marked as COMPLETED and lifecycle status updated to ACTIVE.",
-      data: record,
+      message: result.message,
+      data: result.onboarding,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleError(res, error, "Failed to complete onboarding");
+  }
+};
+
+// =========================================================================
+// 16. EMPLOYEE ACTIVATION
+// =========================================================================
+export const activateEmployee = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await activateEmployeeService({ req, onboardingId: id });
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+      data: result,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to activate employee");
+  }
+};
+
+// =========================================================================
+// 17. LOGIN PROVISIONING & ENABLE/DISABLE
+// =========================================================================
+export const provisionAccount = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await provisionAccountService({ req, onboardingId: id, body: req.body });
+    return res.status(201).json({
+      success: true,
+      message: result.message,
+      data: result.employee,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to provision login account");
+  }
+};
+
+export const enableLogin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await toggleLoginAccessService({ req, onboardingId: id, body: { enable: true } });
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+      data: result.employee,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to enable login");
+  }
+};
+
+export const disableLogin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await toggleLoginAccessService({ req, onboardingId: id, body: { enable: false } });
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+      data: result.employee,
+    });
+  } catch (error) {
+    return handleError(res, error, "Failed to disable login");
   }
 };

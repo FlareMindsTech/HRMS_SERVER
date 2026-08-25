@@ -6,13 +6,15 @@ import {
   deleteCurrentCompany,
   getAllCurrentCompanies
 } from "../Controller/CurrentCompanyController.js";
+import { uploadMiddleware } from "../Services/UploadService.js";
 
 const router = express.Router();
 
-router.post("/", createCurrentCompany);
+router.post("/", uploadMiddleware.any(), createCurrentCompany);
 router.get("/", getAllCurrentCompanies);
 router.get("/:userId", getCurrentCompanyByUserId);
-router.put("/:userId", updateCurrentCompany);
+router.put("/:userId", uploadMiddleware.any(), updateCurrentCompany);
 router.delete("/:userId", deleteCurrentCompany);
 
 export default router;
+

@@ -115,7 +115,17 @@ const documentSchema = new Schema(
     attachments: [{
       category: {
         type: String,
-        enum: ["OFFER_LETTER", "JOINING_DOC", "ID_PROOF", "CERTIFICATE", "EXPERIENCE_LETTER", "EXIT_DOC", "OTHER"],
+        enum: [
+          "OFFER_LETTER",
+          "JOINING_DOC",
+          "ID_PROOF",
+          "CERTIFICATE",
+          "EXPERIENCE_LETTER",
+          "PAYSLIP",
+          "RELIEVING_LETTER",
+          "EXIT_DOC",
+          "OTHER",
+        ],
         required: true,
       },
       title: { type: String, required: true },

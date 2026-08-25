@@ -7,6 +7,7 @@ import Role from "../Modules/RoleModules.js";
 import Attendance from "../Modules/AttendanceModule.js";
 import { canAssignRole, canModifyUserAccount } from "../Utils/RoleAuthority.js";
 import { logAudit } from "../Utils/AuditLogger.js";
+import { processCloudinaryUpload } from "../Services/UploadService.js";
 
 const SALT_ROUNDS = 10;
 
@@ -49,6 +50,254 @@ const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
 
 const getTodayString = () => {
   return new Date().toISOString().split("T")[0];
+};
+
+// Helper to generate next unique Employee Code EMP0001
+export const generateNextEmployeeCode = async () => {
+  const users = await User.find({ employeeCode: { $regex: /^EMP/i } })
+    .select("employeeCode")
+    .lean();
+
+  let maxNum = 0;
+  for (const u of users) {
+    if (u.employeeCode) {
+      const numPart = parseInt(u.employeeCode.replace(/\D/g, ""), 10);
+      if (!isNaN(numPart) && numPart > maxNum) {
+        maxNum = numPart;
+      }
+    }
+  }
+
+  let nextNum = maxNum + 1;
+  let code = `EMP${String(nextNum).padStart(4, "0")}`;
+
+  while (await User.exists({ employeeCode: code })) {
+    nextNum++;
+    code = `EMP${String(nextNum).padStart(4, "0")}`;
+  }
+
+  return code;
+};
+
+// ======================================================
+// REGISTER USER (Common Registration Endpoint)
+// ======================================================
+export const register = async (req, res) => {
+  try {
+    const {
+      firstName,
+      middleName,
+      lastName,
+      name,
+      fullName,
+      email,
+      password,
+      mobileNo,
+      mobileNumber,
+      employeeCode,
+      role,
+      roleId,
+      roleCode,
+      dob,
+      gender,
+      marriageStatus,
+      bloodGroup,
+      department,
+      designation,
+      employmentType,
+      joiningDate,
+      tlCode,
+      hasLoginAccess,
+      avatarUrl,
+      profilePic,
+    } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required.",
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const phone = mobileNo || mobileNumber || req.body.phone;
+
+    // 1. Check duplicate email or mobile
+    const existingUser = await User.findOne({
+      $or: [
+        { email: normalizedEmail },
+        ...(phone ? [{ mobileNo: phone.trim() }] : []),
+      ],
+    });
+
+    if (existingUser) {
+      const isEmailMatch = existingUser.email === normalizedEmail;
+      return res.status(409).json({
+        success: false,
+        message: isEmailMatch
+          ? "User with this email already exists."
+          : "User with this mobile number already exists.",
+      });
+    }
+
+    // 2. Names parsing
+    let fName = firstName;
+    let lName = lastName;
+
+    if (!fName && (name || fullName)) {
+      const rawName = (name || fullName).trim();
+      const parts = rawName.split(" ");
+      fName = parts[0];
+      lName = parts.slice(1).join(" ") || parts[0];
+    }
+
+    fName = (fName || "Employee").trim();
+    lName = (lName || "User").trim();
+
+    // 3. Employee Code
+    let empCode = employeeCode ? employeeCode.trim().toUpperCase() : null;
+    if (!empCode) {
+      empCode = await generateNextEmployeeCode();
+    } else {
+      const codeExists = await User.exists({ employeeCode: empCode });
+      if (codeExists) {
+        empCode = await generateNextEmployeeCode();
+      }
+    }
+
+    // 4. Role determination
+    let assignedRoleId = null;
+    let userRoleDoc = null;
+
+    if (roleId && mongoose.Types.ObjectId.isValid(roleId)) {
+      userRoleDoc = await Role.findById(roleId);
+    } else if (role && mongoose.Types.ObjectId.isValid(role)) {
+      userRoleDoc = await Role.findById(role);
+    } else if (roleCode || typeof role === "string") {
+      const searchCode = (roleCode || role).trim().toUpperCase();
+      userRoleDoc = await Role.findOne({
+        $or: [{ roleCode: searchCode }, { roleName: new RegExp(`^${searchCode}$`, "i") }],
+      });
+    }
+
+    if (!userRoleDoc) {
+      // Default to EMPLOYEE role
+      userRoleDoc = await Role.findOne({
+        $or: [{ roleCode: "EMPLOYEE" }, { roleName: /employee/i }],
+      });
+
+      if (!userRoleDoc) {
+        userRoleDoc = await Role.create({
+          roleName: "Employee",
+          roleCode: "EMPLOYEE",
+          priority: 5,
+          isSystemRole: false,
+          isActive: true,
+        });
+      }
+    }
+
+    assignedRoleId = userRoleDoc._id;
+
+    // 5. Handle optional profile picture file upload if multipart
+    let profileImageUrl = avatarUrl || profilePic || req.body.profileImage || "";
+    const file =
+      req.file ||
+      (req.files &&
+        (req.files.profilePic ||
+          req.files.avatar ||
+          req.files.profileImage ||
+          req.files.image ||
+          (Array.isArray(req.files) ? req.files[0] : null)));
+
+    if (file) {
+      try {
+        const uploadRes = await processCloudinaryUpload({
+          file,
+          folder: "hrms_profile",
+          entityId: empCode,
+        });
+        profileImageUrl = uploadRes.fileUrl;
+      } catch (uploadErr) {
+        console.warn("Profile upload warning during register:", uploadErr.message);
+      }
+    }
+
+    // 6. Hash password
+    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
+    // 7. Create User
+    const newUser = await User.create({
+      firstName: fName,
+      middleName: middleName ? middleName.trim() : null,
+      lastName: lName,
+      email: normalizedEmail,
+      mobileNo: phone ? phone.trim() : `${Date.now()}`.slice(-10),
+      password: hashedPassword,
+      employeeCode: empCode,
+      dob: dob ? new Date(dob) : new Date("1995-01-01"),
+      gender: ["Male", "Female", "Others"].includes(gender) ? gender : "Male",
+      marriageStatus: ["Married", "Unmarried"].includes(marriageStatus) ? marriageStatus : "Unmarried",
+      bloodGroup: bloodGroup || null,
+      role: assignedRoleId,
+      hasLoginAccess: hasLoginAccess !== undefined ? Boolean(hasLoginAccess) : true,
+      department: department ? department.trim() : "General",
+      designation: designation ? designation.trim() : "Employee",
+      employmentType: employmentType || "FULL_TIME",
+      joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
+      lifecycleStatus: "ACTIVE",
+      isActive: true,
+      isBlocked: false,
+      avatarUrl: profileImageUrl,
+      profilePic: profileImageUrl,
+      profilePicUrl: profileImageUrl,
+      profileImage: profileImageUrl,
+    });
+
+    // 8. Generate JWT Token
+    const jwtPayload = {
+      id: newUser._id,
+      email: newUser.email,
+      role: userRoleDoc.roleCode || "EMPLOYEE",
+      priority: userRoleDoc.priority || 5,
+    };
+    const token = jwt.sign(jwtPayload, process.env.JWT || "secret_key", {
+      expiresIn: "7d",
+    });
+
+    const sanitizedUser = newUser.toObject();
+    delete sanitizedUser.password;
+
+    await logAudit({
+      req,
+      action: "REGISTER_USER",
+      module: "USER_MANAGEMENT",
+      resourceId: newUser._id.toString(),
+      details: `User registered: ${newUser.employeeCode} (${newUser.email})`,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      token,
+      data: {
+        user: sanitizedUser,
+        role: userRoleDoc.roleCode || "EMPLOYEE",
+      },
+    });
+  } catch (error) {
+    console.error("register Error:", error);
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "Email, mobile number, or employee code already exists.",
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Failed to register user: " + error.message,
+    });
+  }
 };
 
 // ======================================================
@@ -371,6 +620,8 @@ export const login = async (req, res) => {
           lastName: user.lastName,
           email: user.email,
           mobileNo: user.mobileNo,
+          avatarUrl: user.avatarUrl || user.profilePic || user.profileImage || "",
+          profilePic: user.profilePic || user.avatarUrl || "",
           role: user.role,
           roleCode: userRoleDoc.roleCode,
           roleName: userRoleDoc.roleName,
@@ -417,6 +668,7 @@ export const profile = async (req, res) => {
       .select(
         "firstName middleName lastName email dob gender " +
         "marriageStatus bloodGroup mobileNo employeeCode " +
+        "avatarUrl profilePic profilePicUrl profileImage " +
         "role tlCode isActive isBlocked wfh " +
         "lastLoginAt lastLoginLocation"
       )
@@ -574,7 +826,7 @@ export const getAllUser = async (req, res) => {
       User.find(filter)
         .select(
           "firstName middleName lastName email mobileNo " +
-          "employeeCode role tlCode isActive isBlocked wfh " +
+          "employeeCode avatarUrl profilePic profilePicUrl profileImage role tlCode isActive isBlocked wfh " +
           "hasLoginAccess accountProvisionedAt accountProvisionedBy " +
           "department designation lifecycleStatus joiningDate"
         )
@@ -631,6 +883,7 @@ export const getUserById = async (req, res) => {
       .select(
         "firstName middleName lastName email dob gender " +
         "marriageStatus bloodGroup mobileNo employeeCode " +
+        "avatarUrl profilePic profilePicUrl profileImage " +
         "role tlCode isActive isBlocked wfh " +
         "lastLoginAt lastLoginLocation"
       )
@@ -689,6 +942,10 @@ export const updateUser = async (req, res) => {
       "mobileNo",
       "employeeCode",
       "tlCode",
+      "avatarUrl",
+      "profilePic",
+      "profilePicUrl",
+      "profileImage",
     ];
 
     const updates = {};
@@ -697,6 +954,20 @@ export const updateUser = async (req, res) => {
       if (req.body[field] !== undefined) {
         updates[field] = req.body[field];
       }
+    }
+
+    // Process file upload if provided in multipart request
+    const file = req.file || (req.files && (req.files.profilePic || req.files.avatar || req.files.image || (Array.isArray(req.files) ? req.files[0] : null)));
+    if (file) {
+      const uploadRes = await processCloudinaryUpload({
+        file,
+        folder: "hrms_profile",
+        entityId: id,
+      });
+      updates.avatarUrl = uploadRes.fileUrl;
+      updates.profilePic = uploadRes.fileUrl;
+      updates.profilePicUrl = uploadRes.fileUrl;
+      updates.profileImage = uploadRes.fileUrl;
     }
 
     if (updates.email) {
@@ -747,6 +1018,7 @@ export const updateUser = async (req, res) => {
         .select(
           "firstName middleName lastName email dob gender " +
           "marriageStatus bloodGroup mobileNo employeeCode " +
+          "avatarUrl profilePic profilePicUrl profileImage " +
           "role tlCode isActive isBlocked wfh"
         )
         .lean();
@@ -1128,6 +1400,92 @@ export const deleteUser = async (req, res) => {
     return res.status(500).json({
       message: "Failed to delete user",
       error: error.message,
+    });
+  }
+};
+
+// ======================================================
+// UPLOAD PROFILE PICTURE
+// ======================================================
+
+export const uploadProfilePicture = async (req, res) => {
+  try {
+    const userId = req.params.id || req.body.userId || req.user?.id;
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid user ID is required",
+      });
+    }
+
+    const file =
+      req.file ||
+      (req.files &&
+        (req.files.profilePic ||
+          req.files.profileImage ||
+          req.files.avatar ||
+          req.files.photo ||
+          req.files.image ||
+          (Array.isArray(req.files) ? req.files[0] : null)));
+
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        message: "No profile photo file uploaded",
+      });
+    }
+
+    const uploadRes = await processCloudinaryUpload({
+      file,
+      folder: "hrms_profile",
+      entityId: userId,
+    });
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $set: {
+          avatarUrl: uploadRes.fileUrl,
+          profilePic: uploadRes.fileUrl,
+          profilePicUrl: uploadRes.fileUrl,
+          profileImage: uploadRes.fileUrl,
+        },
+      },
+      { new: true }
+    )
+      .select(
+        "firstName middleName lastName email dob gender " +
+        "marriageStatus bloodGroup mobileNo employeeCode " +
+        "avatarUrl profilePic profilePicUrl profileImage " +
+        "role tlCode isActive isBlocked wfh"
+      )
+      .lean();
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile photo uploaded successfully",
+      data: {
+        userId: updatedUser._id,
+        avatarUrl: uploadRes.fileUrl,
+        profilePic: uploadRes.fileUrl,
+        profilePicUrl: uploadRes.fileUrl,
+        profileImage: uploadRes.fileUrl,
+        user: updatedUser,
+      },
+    });
+  } catch (error) {
+    console.error("Upload Profile Picture Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to upload profile photo: " + error.message,
     });
   }
 };
